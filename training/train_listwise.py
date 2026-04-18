@@ -1,17 +1,22 @@
 """
 Step 4.2 — LIPO-λ listwise training.
 
-Uses the custom ListwiseTrainer from listwise_trainer.py.
-Input data is the listwise_pairs.jsonl produced by build_listwise.py.
+Uses LoRA so the base model is loaded once. The LoRA-wrapped model is the policy;
+the frozen base weights (accessed via model.disable_adapter()) are the reference.
+This avoids loading two full 7B copies.
 
 Usage:
     python train_listwise.py --config configs/listwise_config.yaml
+    python train_listwise.py --config configs/listwise_config.yaml \
+        --dataset_path generation/traces/listwise_pairs_small.jsonl \
+        --output_dir   outputs/listwise_small
 """
 
 import argparse
 import yaml
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments
+from peft import LoraConfig, TaskType, get_peft_model
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../generation/code"))
@@ -41,21 +46,29 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Policy model (trained)
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg["model_name_or_path"], torch_dtype=torch.bfloat16
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float16
+    base_model = AutoModelForCausalLM.from_pretrained(
+        cfg["model_name_or_path"], torch_dtype=dtype
     )
 
-    # Reference model (frozen SFT checkpoint — same weights at start)
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        cfg["model_name_or_path"], torch_dtype=torch.bfloat16
+    # Wrap base model with LoRA for the policy. The ListwiseTrainer uses
+    # model.disable_adapter() to get reference log-probs from the same base weights.
+    peft_config = LoraConfig(
+        task_type      = TaskType.CAUSAL_LM,
+        r              = cfg.get("lora_r", 16),
+        lora_alpha     = cfg.get("lora_alpha", 32),
+        lora_dropout   = cfg.get("lora_dropout", 0.05),
+        target_modules = ["q_proj", "v_proj"],
     )
+    model = get_peft_model(base_model, peft_config)
+    model.print_trainable_parameters()
 
     data = load_jsonl(cfg["dataset_path"])
-    split = max(1, int(len(data) * cfg.get("eval_split", 0.05)))
-    train_data, eval_data = data[split:], data[:split]
+    # Ensure at least 1 training sample even on tiny smoke-test datasets
+    n_eval = min(max(1, int(len(data) * cfg.get("eval_split", 0.05))), len(data) - 1)
+    train_data, eval_data = data[n_eval:], data[:n_eval]
 
-    max_length = cfg.get("max_length", 1024)
+    max_length = cfg.get("max_length", 512)
     train_dataset = ListwiseDataset(train_data, tokenizer, max_length)
     eval_dataset  = ListwiseDataset(eval_data,  tokenizer, max_length)
     collator      = ListwiseDataCollator(pad_token_id=tokenizer.pad_token_id)
@@ -66,25 +79,27 @@ def main():
         per_device_train_batch_size = cfg.get("per_device_train_batch_size", 1),
         gradient_accumulation_steps = cfg.get("gradient_accumulation_steps", 16),
         num_train_epochs            = cfg.get("num_train_epochs", 2),
-        logging_steps               = 10,
+        logging_steps               = 1,
         save_strategy               = "epoch",
         bf16                        = torch.cuda.is_available(),
+        fp16                        = False,  # MPS + torch<2.5 doesn't support accelerate fp16
         remove_unused_columns       = False,
         dataloader_pin_memory       = False,
     )
 
     lambdas = tuple(cfg.get("lambdas", [1.0, 0.75, 0.5, 0.25]))
 
+    # ref_model=None signals ListwiseTrainer to use disable_adapter() for reference
     trainer = ListwiseTrainer(
-        ref_model         = ref_model,
-        beta              = cfg.get("beta", 0.1),
-        lambdas           = lambdas,
-        model             = model,
-        args              = training_args,
-        train_dataset     = train_dataset,
-        eval_dataset      = eval_dataset,
-        data_collator     = collator,
-        tokenizer         = tokenizer,
+        ref_model     = None,
+        beta          = cfg.get("beta", 0.1),
+        lambdas       = lambdas,
+        model         = model,
+        args          = training_args,
+        train_dataset = train_dataset,
+        eval_dataset  = eval_dataset,
+        data_collator = collator,
+        tokenizer     = tokenizer,
     )
 
     trainer.train()

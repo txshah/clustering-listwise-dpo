@@ -154,11 +154,15 @@ class ListwiseTrainer(Trainer):
 
     def __init__(self, ref_model, beta: float, lambdas: tuple, **kwargs):
         super().__init__(**kwargs)
-        self.ref_model = ref_model.eval()
+        # ref_model=None means use the base model via disable_adapter() (LoRA setup).
+        # ref_model=<model> means a separate frozen copy (full fine-tune setup).
+        self.ref_model = ref_model
         self.beta      = beta
         self.lambdas   = lambdas
-        for p in self.ref_model.parameters():
-            p.requires_grad_(False)
+        if self.ref_model is not None:
+            self.ref_model.eval()
+            for p in self.ref_model.parameters():
+                p.requires_grad_(False)
 
     def _get_logps(self, model, key: str, inputs: dict) -> torch.Tensor:
         return get_per_sample_logps(
@@ -174,9 +178,13 @@ class ListwiseTrainer(Trainer):
         # Policy log probs (with grad)
         policy_logps = {k: self._get_logps(model, k, inputs) for k in keys}
 
-        # Reference log probs (no grad)
+        # Reference log probs (no grad) — use frozen base via disable_adapter() if LoRA
         with torch.no_grad():
-            ref_logps = {k: self._get_logps(self.ref_model, k, inputs) for k in keys}
+            if self.ref_model is None:
+                with model.disable_adapter():
+                    ref_logps = {k: self._get_logps(model, k, inputs) for k in keys}
+            else:
+                ref_logps = {k: self._get_logps(self.ref_model, k, inputs) for k in keys}
 
         # Scores: β * (policy - ref)  — the scoring function from the LPOI doc
         scores = {k: self.beta * (policy_logps[k] - ref_logps[k]) for k in keys}
