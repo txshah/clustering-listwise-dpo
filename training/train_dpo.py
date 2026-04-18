@@ -38,10 +38,16 @@ def build_hf_dataset(jsonl_path: str, test_split: float = 0.05) -> tuple:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/dpo_config.yaml")
+    parser.add_argument("--config",       default="configs/dpo_config.yaml")
+    parser.add_argument("--dataset_path", default=None, help="Override config dataset_path")
+    parser.add_argument("--output_dir",   default=None, help="Override config output_dir")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    if args.dataset_path:
+        cfg["dataset_path"] = args.dataset_path
+    if args.output_dir:
+        cfg["output_dir"] = args.output_dir
 
     tokenizer = AutoTokenizer.from_pretrained(cfg["model_name_or_path"])
     if tokenizer.pad_token is None:

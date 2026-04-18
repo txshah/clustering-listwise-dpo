@@ -22,19 +22,32 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 
+# torch.isin on Long tensors is broken on MPS before macOS 14.
+# Cast to float, run isin, cast result back to bool.
+if torch.backends.mps.is_available():
+    _orig_isin = torch.isin
+    def _mps_isin(elements, test_elements, **kwargs):
+        if elements.is_floating_point() or test_elements.is_floating_point():
+            return _orig_isin(elements, test_elements, **kwargs)
+        return _orig_isin(elements.float(), test_elements.float(), **kwargs).bool()
+    torch.isin = _mps_isin
+
 from utils import load_jsonl, save_jsonl
 
 
 def build_prompt(question: str, tokenizer) -> str:
     """
-    Format the question into a chat prompt.
-    Swap this out if your model expects a different template.
+    Format the question into a prompt.
+    Uses chat template if available (instruct models); falls back to a plain
+    Question/Answer format for base models like Mistral-7B-v0.1.
     """
-    messages = [{"role": "user", "content": question}]
-    # apply_chat_template handles [INST] / <|user|> etc. automatically
-    return tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    if tokenizer.chat_template is not None:
+        messages = [{"role": "user", "content": question}]
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    # Base model fallback — matches the paper's simple prompt style
+    return f"Question: {question}\nAnswer:"
 
 
 def generate_traces(
@@ -89,12 +102,19 @@ def main():
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
     print(f"Loading model {args.model} on {device}...")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
+    # MPS (Apple Silicon) doesn't support bfloat16 before macOS 14 — use float16 instead
+    dtype = torch.bfloat16 if device == "cuda" else torch.float16
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, torch_dtype=torch.bfloat16
+        args.model, dtype=dtype
     ).to(device)
     model.eval()
 

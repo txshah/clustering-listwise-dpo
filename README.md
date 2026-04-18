@@ -105,17 +105,84 @@ clustering-listwise-dpo/
 
 ## End-to-End Commands
 
+### Smoke test first (10 questions — validates full pipeline end-to-end)
+
+Runs the entire pipeline on 10 questions so you can confirm every step works
+before committing to the full overnight job on a GPU machine.
+
+Threshold=2 means: a question is "done" once we have 2 correct + 2 incorrect
+traces for it. Lower = easier to satisfy with fewer samples, so the small test
+completes quickly. The full run uses 5+5.
+
+```bash
+# Slice 10 questions from the full set
+python -c "
+import json
+data = [json.loads(l) for l in open('generation/traces/questions.jsonl')]
+with open('generation/traces/questions_small.jsonl','w') as f:
+    [f.write(json.dumps(d)+'\n') for d in data[:10]]
+"
+
+# 2. Generate (10 questions × 10 samples = 100 traces)
+python generation/code/generate_traces.py \
+    --input          generation/traces/questions_small.jsonl \
+    --output         generation/traces/raw/raw_traces_small.jsonl \
+    --model          mistralai/Mistral-7B-v0.1 \
+    --n_samples      10 \
+    --max_new_tokens 256
+
+# 3. Sort into correct / wrong (threshold=2 per class)
+python generation/code/process_traces.py \
+    --input          generation/traces/raw/raw_traces_small.jsonl \
+    --output         generation/traces/processed/results_small.jsonl \
+    --correct_thresh 2 \
+    --wrong_thresh   2
+
+# 4.1 Build DPO pairs and train
+python generation/code/build_pairs.py \
+    --input     generation/traces/processed/results_small.jsonl \
+    --output    generation/traces/dpo_pairs_small.jsonl
+
+python training/train_dpo.py \
+    --config       training/configs/dpo_config.yaml \
+    --dataset_path generation/traces/dpo_pairs_small.jsonl \
+    --output_dir   outputs/dpo_small
+
+# 4.2 Build listwise pairs and train
+python generation/code/build_listwise.py \
+    --input       generation/traces/processed/results_small.jsonl \
+    --output      generation/traces/listwise_pairs_small.jsonl \
+    --n_per_class 2
+
+python training/train_listwise.py \
+    --config       training/configs/listwise_config.yaml \
+    --dataset_path generation/traces/listwise_pairs_small.jsonl \
+    --output_dir   outputs/listwise_small
+
+# 5. Evaluate both
+python evaluation/eval_gsm8k.py --model outputs/dpo_small      --output results_dpo_small.json
+python evaluation/eval_gsm8k.py --model outputs/listwise_small --output results_listwise_small.json
+```
+
+Accuracy on 10 training questions won't be meaningful, but every step
+producing output without errors means the full run is safe to launch.
+
+---
+
+### Full run (GPU recommended — A100/H100 for the generation step)
+
 ```bash
 # 1. Prepare questions (GSM8K train split)
 python generation/code/prepare_questions.py \
     --output generation/traces/questions.jsonl
 
 # 2. Generate raw traces (temp=1, 30 samples/question)
+#    7473 questions × 30 samples — run on GPU, not MPS
 python generation/code/generate_traces.py \
-    --input         generation/traces/questions.jsonl \
-    --output        generation/traces/raw/raw_traces.jsonl \
-    --model         YOUR_SFT_MODEL \
-    --n_samples     30 \
+    --input          generation/traces/questions.jsonl \
+    --output         generation/traces/raw/raw_traces.jsonl \
+    --model          mistralai/Mistral-7B-v0.1 \
+    --n_samples      30 \
     --max_new_tokens 512
 
 # 3. Sort into correct / wrong pools (5 of each)
@@ -124,7 +191,17 @@ python generation/code/process_traces.py \
     --output         generation/traces/processed/results.jsonl \
     --correct_thresh 5 \
     --wrong_thresh   5
-# Re-run steps 2-3 on results_needs_more.jsonl for questions that didn't hit threshold
+
+# If results_needs_more.jsonl is non-empty, re-run steps 2-3 on it:
+python generation/code/generate_traces.py \
+    --input  generation/traces/processed/results_needs_more.jsonl \
+    --output generation/traces/raw/raw_traces_round2.jsonl \
+    --model  mistralai/Mistral-7B-v0.1 \
+    --n_samples 30 --max_new_tokens 512
+python generation/code/process_traces.py \
+    --input  generation/traces/raw/raw_traces_round2.jsonl \
+    --output generation/traces/processed/results.jsonl \
+    --correct_thresh 5 --wrong_thresh 5
 
 # 4.1 Build DPO pairs and train
 python generation/code/build_pairs.py \
