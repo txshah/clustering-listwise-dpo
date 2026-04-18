@@ -1,0 +1,12 @@
+model_name_or_path: mistralai/Mistral-7B-v0.1   # swap for your SFT checkpoint
+dataset_path:       generation/traces/dpo_pairs.jsonl
+output_dir:         outputs/dpo_mistral7b
+
+beta:                        0.1
+learning_rate:               1.0e-6
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 8
+num_train_epochs:            2
+max_length:                  1024
+max_prompt_length:           512
+eval_split:                  0.05

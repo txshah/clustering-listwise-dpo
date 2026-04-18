@@ -1,0 +1,14 @@
+model_name_or_path: mistralai/Mistral-7B-v0.1   # swap for your SFT checkpoint
+dataset_path:       generation/traces/listwise_pairs.jsonl
+output_dir:         outputs/listwise_mistral7b
+
+# LIPO-λ hyperparameters
+beta:    0.1
+lambdas: [1.0, 0.75, 0.5, 0.25]   # λ per cascade level (top rank weighted most)
+
+learning_rate:               1.0e-6
+per_device_train_batch_size: 1     # 5 sequences per item — lower batch size needed
+gradient_accumulation_steps: 16
+num_train_epochs:            2
+max_length:                  1024
+eval_split:                  0.05
