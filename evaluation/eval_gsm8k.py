@@ -50,10 +50,13 @@ def evaluate(model, tokenizer, dataset, max_new_tokens: int, device: str) -> dic
     results = []
 
     for item in tqdm(dataset, desc="evaluating"):
-        messages = [{"role": "user", "content": item["question"]}]
-        prompt   = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        if tokenizer.chat_template is not None:
+            messages = [{"role": "user", "content": item["question"]}]
+            prompt   = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        else:
+            prompt = f"Question: {item['question']}\nAnswer:"
         inputs = tokenizer(prompt, return_tensors="pt").to(device)
 
         with torch.no_grad():
