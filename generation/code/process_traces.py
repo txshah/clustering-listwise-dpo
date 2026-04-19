@@ -26,7 +26,7 @@ from tqdm import tqdm
 from utils import load_jsonl, save_jsonl, is_correct, no_similar, exist_error
 
 
-def process(raw_traces: list[dict]) -> list[dict]:
+def process(raw_traces: list[dict], length_window: int = 500) -> list[dict]:
     pools: dict[int, dict] = defaultdict(lambda: {
         "question": "",
         "answer": "",
@@ -44,10 +44,10 @@ def process(raw_traces: list[dict]) -> list[dict]:
         pool["answer"]   = gt
 
         if is_correct(trace, gt):
-            if not exist_error(trace) and no_similar(trace, pool["correct_solutions"]):
+            if not exist_error(trace) and no_similar(trace, pool["correct_solutions"], length_window):
                 pool["correct_solutions"].append(trace)
         else:
-            if no_similar(trace, pool["wrong_solutions"]):
+            if no_similar(trace, pool["wrong_solutions"], length_window):
                 pool["wrong_solutions"].append(trace)
 
     return [{"idx": idx, **pool} for idx, pool in pools.items()]
@@ -57,6 +57,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input",  required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--length_window", type=int, default=500,
+                        help="Min char-length difference to treat two traces as distinct. "
+                             "Use 0 to disable dedup (useful for small smoke-test runs).")
     args = parser.parse_args()
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
@@ -64,7 +67,7 @@ def main():
     raw = load_jsonl(args.input)
     print(f"Loaded {len(raw)} raw traces.")
 
-    results = process(raw)
+    results = process(raw, length_window=args.length_window)
     save_jsonl(results, args.output)
 
     for r in results:
