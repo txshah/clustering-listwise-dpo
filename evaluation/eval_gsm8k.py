@@ -92,6 +92,8 @@ def main():
     parser.add_argument("--output",         default="eval_results.json")
     parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--split",          default="test", choices=["train", "test"])
+    parser.add_argument("--limit",          type=int, default=None,
+                        help="Evaluate only the first N questions (default: all)")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -108,6 +110,8 @@ def main():
 
     print("Loading GSM8K...")
     dataset = load_dataset("openai/gsm8k", "main", split=args.split)
+    if args.limit is not None:
+        dataset = dataset.select(range(min(args.limit, len(dataset))))
 
     summary = evaluate(model, tokenizer, dataset, args.max_new_tokens, device)
 
