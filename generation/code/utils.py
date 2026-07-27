@@ -25,11 +25,19 @@ def save_jsonl(data: list[dict], path: str) -> None:
 
 def is_correct(trace: str, ground_truth: str) -> bool:
     """
-    Mirrors the paper: checks whether the ground_truth appears in the final
-    portion of the trace (last 300 chars), i.e. the model's final answer.
+    Checks whether the ground_truth appears as a STANDALONE number in the
+    final portion of the trace (last 300 chars), i.e. the model's final answer.
     Works with GSM8K answers (already extracted to plain numbers by prepare_questions.py).
+
+    The boundary guards replace the original raw substring check, which
+    produced false positives whenever the gold digits appeared inside a
+    larger number: gold "85" matched a phone number "91-85943-57126",
+    gold "5" matched "$15" or "$65".  Commas are stripped from both sides
+    so "1,200" in a trace matches gold "1200".
     """
-    return ground_truth.strip() in trace[-300:]
+    gold = ground_truth.strip().replace(",", "")
+    tail = trace[-300:].replace(",", "")
+    return re.search(rf"(?<![\d.]){re.escape(gold)}(?!\.?\d)", tail) is not None
 
 
 # ── Deduplication ─────────────────────────────────────────────────────────────

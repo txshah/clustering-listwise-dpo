@@ -128,7 +128,7 @@ def build_listwise(
     if use_entailment_count:
         print(f"Used entailment ranking for {use_entailment_count}/{len(pairs)} questions.")
     else:
-        print("Used length ranking (no entailment scores found).")
+        print("Used length ranking.")
 
     return pairs
 
