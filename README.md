@@ -127,11 +127,12 @@ peft==0.13.2
 accelerate==1.13.0
 datasets==4.8.4
 pyyaml
+math-verify   # optional: sympy-based answer checking in eval_gsm8k.py (regex fallback otherwise)
 ```
 
 Install:
 ```bash
-pip install "torch==2.4.1" "transformers==4.45.1" "trl==0.9.6" "peft==0.13.2" "accelerate==1.13.0" "datasets==4.8.4" pyyaml
+pip install "torch==2.4.1" "transformers==4.45.1" "trl==0.9.6" "peft==0.13.2" "accelerate==1.13.0" "datasets==4.8.4" pyyaml math-verify
 ```
 
 ---

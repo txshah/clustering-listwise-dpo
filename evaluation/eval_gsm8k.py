@@ -17,6 +17,14 @@ from tqdm import tqdm
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
+# math-verify (optional, pip install math-verify): sympy-based answer
+# equivalence as used by lighteval / Open R1.  When installed it replaces the
+# regex comparison in is_correct; otherwise the regex fallback below is used.
+try:
+    from math_verify import parse as mv_parse, verify as mv_verify
+except ImportError:
+    mv_parse = None
+
 
 def extract_answer(text: str) -> str | None:
     """
@@ -34,8 +42,15 @@ def extract_answer(text: str) -> str | None:
 
 
 def is_correct(prediction: str, ground_truth: str) -> bool:
+    gt = extract_answer(ground_truth) or ground_truth.strip()
+
+    if mv_parse is not None:
+        try:
+            return bool(mv_verify(mv_parse(gt), mv_parse(prediction)))
+        except Exception:
+            pass  # fall back to the regex comparison below
+
     pred = extract_answer(prediction)
-    gt   = extract_answer(ground_truth) or ground_truth.strip()
     if pred is None:
         return False
     try:
@@ -109,6 +124,7 @@ def main():
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Answer scorer: {'math-verify' if mv_parse is not None else 'regex fallback'}")
 
     print(f"Loading model {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
