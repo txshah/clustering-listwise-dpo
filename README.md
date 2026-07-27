@@ -45,7 +45,7 @@ Train with a custom **ListwiseTrainer** that implements the LIPO-λ loss from [L
 ### 3.5. Step 4.3 — Entailment-labeled listwise data (PORT-style)
 
 A second listwise dataset where the good/bad label comes only from the binarized entailment score, ignoring answer correctness.
-`score_entailment.py` scores every trace with an NLI cross-encoder against a reference (the shortest correct trace of its question).
+`score_entailment.py` scores every trace with an NLI cross-encoder against a reference (the shortest correct trace of its question), taking the min of both entailment directions (mutual entailment, as in the semantic entropy literature) so vague traces cannot score high one-directionally.
 `build_entailment_list.py` then merges the correct and wrong pools, labels each trace good when `score >= threshold` (default 0.5) and bad otherwise, and emits lists at a configurable good:bad ratio (default 1:4, `ListwiseTrainer`-compatible).
 Questions are filtered out when they have no correct trace (no reference) or cannot fill the requested ratio.
 This isolates the labeling metric as the experimental variable versus the correctness-labeled data of Step 4.2.
@@ -256,6 +256,6 @@ total = λ1×losses1 + λ2×losses2 + λ3×losses3 + λ4×losses4
 
 ## Known Limitations
 
-- **Ranking proxy is weak**: incorrect traces ranked by length, not a reward model. Replace `rank_by_length` in `build_listwise.py` to improve.
-- **No preference within correct traces**: only the shortest correct trace is used as `chosen`.
+- **Ranking proxy is heuristic**: `build_listwise.py` ranks by bidirectional NLI entailment when scores are present (length is the fallback), but NLI measures semantic consistency, not arithmetic correctness - a trace with one calculation slip still scores high.
+- **Chosen is anchored to the reference**: correct-trace scores are measured against the shortest correct trace, which scores ~1 against itself, so `chosen` is almost always the reference (56/60 on the 100-question run).
 - **Single-machine generation**: parallelise with vLLM for large-scale runs.

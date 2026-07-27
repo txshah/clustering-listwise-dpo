@@ -44,20 +44,29 @@ def is_correct(prediction: str, ground_truth: str) -> bool:
         return pred == gt
 
 
-def evaluate(model, tokenizer, dataset, max_new_tokens: int, device: str) -> dict:
+def build_prompt(tokenizer, question: str) -> str:
+    if tokenizer.chat_template is not None:
+        messages = [{"role": "user", "content": question}]
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    return f"Question: {question}\nAnswer:"
+
+
+def evaluate(model, tokenizer, dataset, max_new_tokens: int, device: str,
+             batch_size: int) -> dict:
     correct = 0
     total   = len(dataset)
     results = []
 
-    for item in tqdm(dataset, desc="evaluating"):
-        if tokenizer.chat_template is not None:
-            messages = [{"role": "user", "content": item["question"]}]
-            prompt   = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-        else:
-            prompt = f"Question: {item['question']}\nAnswer:"
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    # left padding so every sequence's prompt ends at the same position and
+    # the generated continuation starts right after it
+    tokenizer.padding_side = "left"
+
+    for start in tqdm(range(0, total, batch_size), desc="evaluating"):
+        batch   = dataset.select(range(start, min(start + batch_size, total)))
+        prompts = [build_prompt(tokenizer, item["question"]) for item in batch]
+        inputs  = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
 
         with torch.no_grad():
             output_ids = model.generate(
@@ -69,18 +78,19 @@ def evaluate(model, tokenizer, dataset, max_new_tokens: int, device: str) -> dic
             )
 
         prompt_len = inputs["input_ids"].shape[1]
-        response   = tokenizer.decode(output_ids[0][prompt_len:], skip_special_tokens=True)
-        correct_ans = item["answer"]
+        for item, out in zip(batch, output_ids):
+            response    = tokenizer.decode(out[prompt_len:], skip_special_tokens=True)
+            correct_ans = item["answer"]
 
-        ok = is_correct(response, correct_ans)
-        correct += int(ok)
+            ok = is_correct(response, correct_ans)
+            correct += int(ok)
 
-        results.append({
-            "question": item["question"],
-            "ground_truth": correct_ans,
-            "prediction": response,
-            "correct": ok,
-        })
+            results.append({
+                "question": item["question"],
+                "ground_truth": correct_ans,
+                "prediction": response,
+                "correct": ok,
+            })
 
     accuracy = correct / total
     return {"accuracy": accuracy, "correct": correct, "total": total, "results": results}
@@ -91,6 +101,8 @@ def main():
     parser.add_argument("--model",          required=True,  help="Path to trained model or HF id")
     parser.add_argument("--output",         default="eval_results.json")
     parser.add_argument("--max_new_tokens", type=int, default=512)
+    parser.add_argument("--batch_size",     type=int, default=8,
+                        help="Questions decoded per forward pass (lower if OOM)")
     parser.add_argument("--split",          default="test", choices=["train", "test"])
     parser.add_argument("--limit",          type=int, default=None,
                         help="Evaluate only the first N questions (default: all)")
@@ -113,7 +125,8 @@ def main():
     if args.limit is not None:
         dataset = dataset.select(range(min(args.limit, len(dataset))))
 
-    summary = evaluate(model, tokenizer, dataset, args.max_new_tokens, device)
+    summary = evaluate(model, tokenizer, dataset, args.max_new_tokens, device,
+                       args.batch_size)
 
     print(f"\nAccuracy: {summary['accuracy']:.4f}  ({summary['correct']}/{summary['total']})")
 

@@ -8,12 +8,15 @@ per question.  Supports two ranking methods:
     Shorter trace = better quality proxy.  Fast, no model needed.
 
   entailment (used automatically when entailment_scores field is present)
-    Traces are ranked by their NLI entailment score against the best correct
-    solution (computed by score_entailment.py).  Higher score = reasoning
-    more aligned with a known-correct trace = less bad = ranked first.
-
-    For chosen selection, the correct trace with the highest entailment score
-    is preferred over the shortest one.
+    Correctness stays the hard gate: chosen always comes from the correct
+    traces, rejected only from the wrong ones.  Entailment only ranks within
+    each group, over the FULL trace pool (no first-N truncation):
+      chosen      = correct trace with the highest score
+      rejected1-4 = wrong traces by descending score (least bad first)
+    Higher score = reasoning more aligned with a known-correct trace.
+    Note: correct-trace scores are measured against the shortest correct
+    trace (the reference), which scores ~1 against itself — so chosen is
+    usually the reference itself unless another correct trace out-entails it.
 
 Ranking method selection (--ranking_method):
   auto        use entailment when scores are present, otherwise length [default]
@@ -78,8 +81,8 @@ def build_listwise(
     use_entailment_count = 0
 
     for item in tqdm(processed, desc="building listwise"):
-        corrects = item["correct_solutions"][:n_per_class]
-        wrongs   = item["wrong_solutions"][:n_per_class]
+        corrects = item["correct_solutions"]
+        wrongs   = item["wrong_solutions"]
 
         if len(corrects) < 1 or len(wrongs) < 4:
             skipped += 1
@@ -100,14 +103,16 @@ def build_listwise(
             )
 
         if use_entailment:
-            correct_scores = scores["correct"][:n_per_class]
-            wrong_scores   = scores["wrong"][:n_per_class]
-            chosen         = best_correct_by_entailment(corrects, correct_scores)
-            ranked_wrongs  = rank_by_entailment(wrongs, wrong_scores)[:4]
+            # rank over the FULL pools so the best trace can't be cut by an
+            # arbitrary first-N truncation, then keep the top of each ranking
+            chosen        = best_correct_by_entailment(corrects, scores["correct"])
+            ranked_wrongs = rank_by_entailment(wrongs, scores["wrong"])[:4]
             use_entailment_count += 1
         else:
-            chosen        = rank_by_length(corrects)[0]
-            ranked_wrongs = rank_by_length(wrongs)[:4]
+            # length mode mirrors the original paper: draw from the first
+            # n_per_class traces, then rank those by length
+            chosen        = rank_by_length(corrects[:n_per_class])[0]
+            ranked_wrongs = rank_by_length(wrongs[:n_per_class])[:4]
 
         pairs.append({
             "prompt":    item["question"],
@@ -135,7 +140,8 @@ def main():
     parser.add_argument("--input",          required=True)
     parser.add_argument("--output",         required=True)
     parser.add_argument("--n_per_class",    type=int, default=5,
-                        help="How many traces per class to draw from")
+                        help="How many traces per class to draw from (length mode only; "
+                             "entailment mode ranks the full pool)")
     parser.add_argument("--ranking_method", default="auto",
                         choices=["auto", "length", "entailment"],
                         help="How to rank traces: auto (entailment if available, else length), "
