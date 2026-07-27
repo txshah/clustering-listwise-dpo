@@ -1,0 +1,14 @@
+# PVC for the entailment-1000 run: HF model cache (~15GB for Mistral-7B),
+# traces, and training outputs all live here so pod restarts don't lose work.
+# Apply first: kubectl apply -f pvc-listwise.yml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: assenthi-listwise
+spec:
+  storageClassName: rook-ceph-block
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi

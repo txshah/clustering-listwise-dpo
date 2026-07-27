@@ -42,6 +42,14 @@ Questions with fewer than 4 wrong traces are skipped. The ranking is a weak prox
 
 Train with a custom **ListwiseTrainer** that implements the LIPO-λ loss from [LPOI](https://github.com/fatemehpesaran310/lpoi) (`lpoi_dpo_trainer_5img.py:1537–1542`), adapted for text. Uses `model.disable_adapter()` to get reference log-probs from the frozen base weights — same LoRA memory trick as DPO.
 
+### 3.5. Step 4.3 — Entailment-labeled listwise data (PORT-style)
+
+A second listwise dataset where the good/bad label comes only from the binarized entailment score, ignoring answer correctness.
+`score_entailment.py` scores every trace with an NLI cross-encoder against a reference (the shortest correct trace of its question).
+`build_entailment_list.py` then merges the correct and wrong pools, labels each trace good when `score >= threshold` (default 0.5) and bad otherwise, and emits lists at a configurable good:bad ratio (default 1:4, `ListwiseTrainer`-compatible).
+Questions are filtered out when they have no correct trace (no reference) or cannot fill the requested ratio.
+This isolates the labeling metric as the experimental variable versus the correctness-labeled data of Step 4.2.
+
 ### 4. Evaluation
 
 Both models evaluated on GSM8K test split with greedy decoding (temp=0). Metric: **end accuracy** — does the model's final number match the ground truth?
@@ -85,8 +93,10 @@ clustering-listwise-dpo/
 │   │   ├── prepare_questions.py   # Download GSM8K → questions.jsonl
 │   │   ├── generate_traces.py     # LLM sampling at temp=1 → raw_traces.jsonl
 │   │   ├── process_traces.py      # Correctness check + dedup → results.jsonl (no threshold)
+│   │   ├── score_entailment.py    # Step 2.5: NLI entailment scores vs best correct trace
 │   │   ├── build_pairs.py         # Step 4.1: (prompt, chosen, rejected) string pairs
 │   │   ├── build_listwise.py      # Step 4.2: (chosen, rejected1-4) ranked pairs
+│   │   ├── build_entailment_list.py # Step 4.3: entailment-only labels, ratio as input
 │   │   └── utils.py               # IO, is_correct, no_similar, exist_error
 │   └── traces/                    # All output files land here
 │
@@ -98,8 +108,11 @@ clustering-listwise-dpo/
 │   ├── train_dpo.py               # TRL DPOTrainer + LoRA
 │   └── train_listwise.py          # ListwiseTrainer + LoRA
 │
-└── evaluation/
-    └── eval_gsm8k.py              # Greedy decoding + end accuracy on GSM8K test
+├── evaluation/
+│   └── eval_gsm8k.py              # Greedy decoding + end accuracy on GSM8K test
+│
+├── smoke_test_colab.ipynb         # Self-contained 10-question pipeline (DPO + listwise)
+└── entailment_run_colab.ipynb     # Self-contained 100-question entailment pipeline (Step 4.3)
 ```
 
 ---
@@ -201,6 +214,18 @@ python generation/code/build_listwise.py \
     --input generation/traces/processed/results.jsonl \
     --output generation/traces/listwise_pairs.jsonl --n_per_class 5
 python training/train_listwise.py --config training/configs/listwise_config.yaml
+
+# 4.3 Entailment-labeled listwise (PORT-style)
+python generation/code/score_entailment.py \
+    --input  generation/traces/processed/results.jsonl \
+    --output generation/traces/processed/results_scored.jsonl
+python generation/code/build_entailment_list.py \
+    --input  generation/traces/processed/results_scored.jsonl \
+    --output generation/traces/entailment_pairs.jsonl \
+    --threshold 0.5 --n_good 1 --n_bad 4
+python training/train_listwise.py --config training/configs/listwise_config.yaml \
+    --dataset_path generation/traces/entailment_pairs.jsonl \
+    --output_dir outputs/listwise_entailment
 
 # 5. Eval
 python evaluation/eval_gsm8k.py --model outputs/dpo_mistral7b --output results_dpo.json

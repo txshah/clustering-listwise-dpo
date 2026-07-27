@@ -29,6 +29,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="../traces/questions.jsonl")
     parser.add_argument("--split",  default="train", choices=["train", "test"])
+    parser.add_argument("--limit",  type=int, default=None,
+                        help="Keep only the first N questions (default: all)")
     args = parser.parse_args()
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
@@ -44,6 +46,9 @@ def main():
         }
         for idx, item in enumerate(dataset)
     ]
+
+    if args.limit is not None:
+        questions = questions[:args.limit]
 
     save_jsonl(questions, args.output)
     print(f"Saved {len(questions)} questions → {args.output}")

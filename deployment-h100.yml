@@ -1,0 +1,62 @@
+# Nautilus deployment requesting 1x NVIDIA H100 for the entailment-1000 run.
+#
+# Tip -> Find and replace "assenthi-listwise" with the PVC name
+#
+# Verify the H100 node label on your cluster if scheduling stalls:
+#   kubectl get nodes -L nvidia.com/gpu.product | grep -i h100
+#
+# Usage:
+#   kubectl apply -f pvc-listwise.yml
+#   kubectl apply -f deployment-h100.yml
+#   kubectl exec -it deploy/assenthi-listwise-deployment -- bash
+#   # then inside the pod:
+#   #   cd /pvcvolume && git clone <repo-url> && cd clustering-listwise-dpo
+#   #   pip install "transformers==4.45.1" "accelerate==1.13.0" "datasets==4.8.4" \
+#   #       peft trl==0.9.6 bitsandbytes sentencepiece pyyaml tqdm
+#   #   export HF_HOME=/pvcvolume/hf_cache
+#   #   huggingface-cli login   # Mistral-7B is gated
+#   #   bash run_entailment.sh
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assenthi-listwise-deployment
+  labels:
+    k8s-app: assenthi-listwise
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: assenthi-listwise
+  template:
+    metadata:
+      labels:
+        k8s-app: assenthi-listwise
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+      containers:
+      - name: assenthi-listwise
+        image: pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel
+        resources:
+          limits:
+            memory: 64Gi
+            cpu: "16"
+            nvidia.com/gpu: "1"
+          requests:
+            memory: 48Gi
+            cpu: "12"
+            nvidia.com/gpu: "1"
+        command: [ "sh", "-c", "sleep infinity" ]
+        volumeMounts:
+        - mountPath: /pvcvolume
+          name: vol1
+        - mountPath: /dev/shm
+          name: dshm
+      volumes:
+      - name: vol1
+        persistentVolumeClaim:
+          claimName: assenthi-listwise
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi

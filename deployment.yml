@@ -1,0 +1,48 @@
+# image: nvidia/cuda:12.4.1-cudnn-devel-ubuntu20.04
+# image: nvidia/12.8.1-cudnn-devel-ubuntu20.04
+
+# Tip -> Find and replace "assenthi-pipnet" with the PVC name
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assenthi-deployment
+  labels:
+    k8s-app: assenthi-pipnet
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      k8s-app: assenthi-pipnet
+  template:
+    metadata:
+      labels:
+        k8s-app: assenthi-pipnet
+    spec:
+      nodeSelector: 
+        nvidia.com/gpu.product: NVIDIA-A10
+      containers:
+      - name: assenthi-pipnet
+        image: pytorch/pytorch
+        resources:
+          limits:
+            memory: 100Gi
+            cpu: "16"
+            nvidia.com/gpu: "1"
+          requests:
+            memory: 96Gi
+            cpu: "12"
+            nvidia.com/gpu: "1"
+        command: [ "sh", "-c", "sleep infinity" ]
+        volumeMounts:
+        - mountPath: /pvcvolume
+          name: vol1
+        - mountPath: /dev/shm
+          name: dshm
+      volumes:
+      - name: vol1
+        persistentVolumeClaim:
+          claimName: assenthi-pipnet
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
