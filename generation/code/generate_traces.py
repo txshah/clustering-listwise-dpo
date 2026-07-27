@@ -108,7 +108,7 @@ def main():
     # MPS (Apple Silicon) doesn't support bfloat16 before macOS 14 — use float16 instead
     dtype = torch.bfloat16 if device == "cuda" else torch.float16
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, dtype=dtype
+        args.model, torch_dtype=dtype
     ).to(device)
     model.eval()
 
