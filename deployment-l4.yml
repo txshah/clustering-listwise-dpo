@@ -1,13 +1,14 @@
-# Nautilus deployment requesting 1x NVIDIA H100 for the entailment-1000 run.
+# Nautilus deployment requesting 1x NVIDIA L4 for the entailment-1000 run.
+# (L4 over V100: the pipeline runs in bf16, which needs Ampere+ - V100 is Volta.)
 #
 # Tip -> Find and replace "assenthi-listwise" with the PVC name
 #
-# Verify the H100 node label on your cluster if scheduling stalls:
-#   kubectl get nodes -L nvidia.com/gpu.product | grep -i h100
+# Verify the L4 node label on your cluster if scheduling stalls:
+#   kubectl get nodes -L nvidia.com/gpu.product | grep -i l4
 #
 # Usage:
 #   kubectl apply -f pvc-listwise.yml
-#   kubectl apply -f deployment-h100.yml
+#   kubectl apply -f deployment-l4.yml
 #   kubectl exec -it deploy/assenthi-listwise-deployment -- bash
 #   # then inside the pod:
 #   #   cd /pvcvolume && git clone <repo-url> && cd clustering-listwise-dpo
@@ -33,7 +34,7 @@ spec:
         k8s-app: assenthi-listwise
     spec:
       nodeSelector:
-        nvidia.com/gpu.product: NVIDIA-H100-80GB-HBM3
+        nvidia.com/gpu.product: NVIDIA-L4
       containers:
       - name: assenthi-listwise
         image: pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel
