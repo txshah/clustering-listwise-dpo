@@ -5,7 +5,8 @@ Swap out `is_correct` for your own oracle (exact match, regex, judge model, etc.
 """
 
 import json
-import re
+
+from math_verify import parse as _mv_parse, verify as _mv_verify
 
 
 # ── IO ────────────────────────────────────────────────────────────────────────
@@ -25,32 +26,23 @@ def save_jsonl(data: list[dict], path: str) -> None:
 
 def is_correct(trace: str, ground_truth: str) -> bool:
     """
-    Checks whether the ground_truth appears as a STANDALONE number where a
-    final answer would actually live:
+    Scores the trace with math-verify (the sympy-based checker used by
+    lighteval / Open R1): does the trace's concluding expression equal the
+    ground truth?
 
-      1. after a "####" marker (GSM8K answer format), anywhere in the trace
-      2. at the very start of the trace (answer-first format: "85 trees. ...")
-      3. in the last 100 chars (the conclusion of the trace)
-
-    Standalone means boundary-guarded: gold "85" must not match inside a
-    larger number like "91-85943-57126" or "185", and gold "5" must not
-    match inside "$15" or "8.5".  Commas are stripped from both sides so
-    "1,200" in a trace matches gold "1200".
-
-    The narrow windows replace earlier anywhere-in-tail checks, which
-    produced false positives whenever the gold appeared as an INTERMEDIATE
-    quantity: gold "10" matched "(12 + 10)/60" mid-reasoning in a trace
-    whose actual conclusion was "it is 1 hour".
+    Because the SFT-less base model often states the answer FIRST and then
+    explains ("85 trees.\\nSolution: ..."), the opening line is scored as a
+    second candidate; either location counts.  Everything else — extraction,
+    normalisation, numeric equivalence — is the library's.
     """
-    gold = re.escape(ground_truth.strip().replace(",", ""))
-    standalone = rf"(?<![\d.]){gold}(?!\.?\d)"
-    text = trace.replace(",", "")
-
-    if re.search(rf"####\s*{gold}(?!\.?\d)", text):
-        return True
-    if re.match(rf"\s*\$?\s?{gold}(?!\.?\d)", text):
-        return True
-    return re.search(standalone, text[-100:]) is not None
+    gold = _mv_parse(ground_truth.strip())
+    for candidate in (trace, trace.strip().split("\n", 1)[0]):
+        try:
+            if _mv_verify(gold, _mv_parse(candidate)):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 # ── Deduplication ─────────────────────────────────────────────────────────────

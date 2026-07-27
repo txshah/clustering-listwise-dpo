@@ -127,7 +127,7 @@ peft==0.13.2
 accelerate==1.13.0
 datasets==4.8.4
 pyyaml
-math-verify   # optional: sympy-based answer checking in eval_gsm8k.py (regex fallback otherwise)
+math-verify   # sympy-based answer checking (correctness oracle in utils.py + eval_gsm8k.py)
 ```
 
 Install:
