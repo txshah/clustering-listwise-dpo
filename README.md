@@ -112,7 +112,7 @@ clustering-listwise-dpo/
 │   └── eval_gsm8k.py              # Greedy decoding + end accuracy on GSM8K test
 │
 ├── smoke_test_colab.ipynb         # Self-contained 10-question pipeline (DPO + listwise)
-└── entailment_run_colab.ipynb     # Self-contained 100-question entailment pipeline (Step 4.3)
+└── entailment_run_colab.ipynb     # Colab wrapper: 4-arm 1000-question run (Drive persistence + repo scripts)
 ```
 
 ---

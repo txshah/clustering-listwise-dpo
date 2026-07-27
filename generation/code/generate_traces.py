@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -32,7 +33,7 @@ if torch.backends.mps.is_available():
         return _orig_isin(elements.float(), test_elements.float(), **kwargs).bool()
     torch.isin = _mps_isin
 
-from utils import load_jsonl, save_jsonl
+from utils import load_jsonl
 
 
 def build_prompt(question: str, tokenizer) -> str:
@@ -50,45 +51,38 @@ def build_prompt(question: str, tokenizer) -> str:
     return f"Question: {question}\nAnswer:"
 
 
-def generate_traces(
-    questions: list[dict],
+def generate_for_question(
+    item: dict,
     model,
     tokenizer,
     n_samples: int,
     max_new_tokens: int,
     device: str,
 ) -> list[dict]:
-    """
-    For each question dict, produce n_samples traces at temperature=1.
-    Returns flat list of {idx, question, answer, trace} dicts.
-    """
-    results = []
+    """Produce n_samples traces at temperature=1 for one question dict."""
+    prompt = build_prompt(item["question"], tokenizer)
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    prompt_len = inputs["input_ids"].shape[1]
 
-    for item in tqdm(questions, desc="generating"):
-        prompt = build_prompt(item["question"], tokenizer)
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        prompt_len = inputs["input_ids"].shape[1]
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,       # ← temperature sampling (D_naive)
+            temperature=1.0,      # ← paper uses temp=1 for negative candidates
+            num_return_sequences=n_samples,
+            pad_token_id=tokenizer.eos_token_id,
+        )
 
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,       # ← temperature sampling (D_naive)
-                temperature=1.0,      # ← paper uses temp=1 for negative candidates
-                num_return_sequences=n_samples,
-                pad_token_id=tokenizer.eos_token_id,
-            )
-
-        for seq in output_ids:
-            trace = tokenizer.decode(seq[prompt_len:], skip_special_tokens=True)
-            results.append({
-                "idx": item["idx"],
-                "question": item["question"],
-                "answer": item.get("answer", ""),
-                "trace": trace,
-            })
-
-    return results
+    return [
+        {
+            "idx": item["idx"],
+            "question": item["question"],
+            "answer": item.get("answer", ""),
+            "trace": tokenizer.decode(seq[prompt_len:], skip_special_tokens=True),
+        }
+        for seq in output_ids
+    ]
 
 
 def main():
@@ -119,12 +113,29 @@ def main():
     model.eval()
 
     questions = load_jsonl(args.input)
-    print(f"Loaded {len(questions)} questions. Generating {args.n_samples} traces each...")
 
-    raw_traces = generate_traces(questions, model, tokenizer, args.n_samples, args.max_new_tokens, device)
+    # resume: a question's samples are appended in one write, so any idx already
+    # in the output file was fully generated — skip it and continue from there
+    done = set()
+    if os.path.exists(args.output):
+        done = {r["idx"] for r in load_jsonl(args.output)}
+        if done:
+            print(f"Resuming - {len(done)}/{len(questions)} questions already in {args.output}")
+    todo = [q for q in questions if q["idx"] not in done]
+    print(f"Generating {args.n_samples} traces each for {len(todo)} questions...")
 
-    save_jsonl(raw_traces, args.output)
-    print(f"Saved {len(raw_traces)} raw traces → {args.output}")
+    written = 0
+    with open(args.output, "a", encoding="utf-8") as out:
+        for item in tqdm(todo, desc="generating"):
+            records = generate_for_question(
+                item, model, tokenizer, args.n_samples, args.max_new_tokens, device
+            )
+            for r in records:
+                out.write(json.dumps(r, ensure_ascii=False) + "\n")
+            out.flush()
+            written += len(records)
+
+    print(f"Appended {written} raw traces → {args.output}")
 
 
 if __name__ == "__main__":
