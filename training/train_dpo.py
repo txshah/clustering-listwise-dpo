@@ -104,6 +104,7 @@ def main():
         bf16                        = torch.cuda.is_available(),
         fp16                        = False,  # MPS + torch<2.5 doesn't support accelerate fp16
         remove_unused_columns       = False,
+        report_to                   = "none",  # no wandb prompt on Colab
     )
 
     trainer = DPOTrainer(

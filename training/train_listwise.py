@@ -85,6 +85,7 @@ def main():
         fp16                        = False,  # MPS + torch<2.5 doesn't support accelerate fp16
         remove_unused_columns       = False,
         dataloader_pin_memory       = False,
+        report_to                   = "none",  # no wandb prompt on Colab
     )
 
     lambdas = tuple(cfg.get("lambdas", [1.0, 0.75, 0.5, 0.25]))
