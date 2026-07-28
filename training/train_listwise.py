@@ -58,8 +58,7 @@ def main():
         r              = cfg.get("lora_r", 16),
         lora_alpha     = cfg.get("lora_alpha", 32),
         lora_dropout   = cfg.get("lora_dropout", 0.05),
-        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
-                          "gate_proj", "up_proj", "down_proj"],  # all attention + MLP projections
+        target_modules = "all-linear",  # matches LPOI (lpoi_llava7b.py); SC-DPO full-finetunes
     )
     model = get_peft_model(base_model, peft_config)
     model.print_trainable_parameters()
