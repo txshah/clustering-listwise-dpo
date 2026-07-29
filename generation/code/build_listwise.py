@@ -64,6 +64,31 @@ def rank_by_entailment(traces: list[str], scores: list[float]) -> list[str]:
     return [t for t, _ in sorted(zip(traces, scores), key=lambda x: x[1], reverse=True)]
 
 
+def select_negatives(ranked: list[str], n: int, strategy: str) -> list[str]:
+    """
+    Pick n negatives from the score-ranked (least-bad-first) wrong traces.
+
+      hardest  top n — closest to correct; most informative, but near-duplicates
+               of the chosen risk gradient cancellation
+      easiest  bottom n — clearly-bad traces; clean contrast, no fine distinctions
+      spread   n evenly spaced across the ranking — one near-miss through
+               clearly-bad, keeping the cascade a spectrum
+
+    All strategies return the selection ordered least-bad-first, as the
+    LIPO-lambda cascade expects.
+    """
+    if strategy == "hardest":
+        return ranked[:n]
+    if strategy == "easiest":
+        return ranked[-n:]
+    if strategy == "spread":
+        if len(ranked) <= n:
+            return ranked[:n]
+        step = (len(ranked) - 1) / (n - 1)
+        return [ranked[round(i * step)] for i in range(n)]
+    raise ValueError(f"unknown negative_selection: {strategy}")
+
+
 def best_correct_by_entailment(corrects: list[str], scores: list[float]) -> str:
     """Return the correct trace with the highest entailment score."""
     return max(zip(corrects, scores), key=lambda x: x[1])[0]
@@ -75,6 +100,7 @@ def build_listwise(
     processed: list[dict],
     n_per_class: int,
     ranking_method: str,
+    negative_selection: str = "hardest",
 ) -> list[dict]:
     pairs   = []
     skipped = 0
@@ -104,9 +130,10 @@ def build_listwise(
 
         if use_entailment:
             # rank over the FULL pools so the best trace can't be cut by an
-            # arbitrary first-N truncation, then keep the top of each ranking
+            # arbitrary first-N truncation, then select negatives per strategy
             chosen        = best_correct_by_entailment(corrects, scores["correct"])
-            ranked_wrongs = rank_by_entailment(wrongs, scores["wrong"])[:4]
+            ranked        = rank_by_entailment(wrongs, scores["wrong"])
+            ranked_wrongs = select_negatives(ranked, 4, negative_selection)
             use_entailment_count += 1
         else:
             # length mode mirrors the original paper: draw from the first
@@ -146,6 +173,12 @@ def main():
                         choices=["auto", "length", "entailment"],
                         help="How to rank traces: auto (entailment if available, else length), "
                              "length, or entailment")
+    parser.add_argument("--negative_selection", default="hardest",
+                        choices=["hardest", "easiest", "spread"],
+                        help="Which 4 wrong traces become the negatives (entailment mode): "
+                             "hardest = highest-entailment (near-misses, current default), "
+                             "easiest = lowest-entailment (clearly bad), "
+                             "spread = evenly spaced across the ranking")
     args = parser.parse_args()
 
     out_dir = os.path.dirname(args.output)
@@ -155,7 +188,8 @@ def main():
     processed = load_jsonl(args.input)
     print(f"Loaded {len(processed)} processed questions.")
 
-    pairs = build_listwise(processed, args.n_per_class, args.ranking_method)
+    pairs = build_listwise(processed, args.n_per_class, args.ranking_method,
+                           args.negative_selection)
 
     save_jsonl(pairs, args.output)
     print(f"Saved {len(pairs)} listwise pairs → {args.output}")
