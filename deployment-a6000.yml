@@ -1,19 +1,20 @@
-# Nautilus deployment requesting 1x NVIDIA L4 for the entailment-1000 run.
-# (L4 over V100: the pipeline runs in bf16, which needs Ampere+ - V100 is Volta.)
+# Nautilus deployment requesting 1x NVIDIA RTX A6000 for the entailment-1000 run.
+# (A6000 is Ampere with 48GB VRAM: bf16 works, and the extra memory over the L4's
+# 24GB allows larger EVAL_BATCH and per-device train batch sizes.)
 #
 # Tip -> Find and replace "assenthi-listwise" with the PVC name
 #
-# Verify the L4 node label on your cluster if scheduling stalls:
-#   kubectl get nodes -L nvidia.com/gpu.product | grep -i l4
+# Verify the A6000 node label on your cluster if scheduling stalls:
+#   kubectl get nodes -L nvidia.com/gpu.product | grep -i a6000
 #
 # Usage:
 #   kubectl apply -f pvc-listwise.yml
-#   kubectl apply -f deployment-l4.yml
+#   kubectl apply -f deployment-a6000.yml
 #   kubectl exec -it deploy/assenthi-listwise-deployment -- bash
 #   # then inside the pod:
 #   #   cd /pvcvolume && git clone <repo-url> && cd clustering-listwise-dpo
 #   #   pip install "transformers==4.45.1" "accelerate==1.13.0" "datasets==4.8.4" \
-#   #       peft trl==0.9.6 bitsandbytes sentencepiece pyyaml tqdm
+#   #       peft trl==0.9.6 bitsandbytes sentencepiece pyyaml tqdm math-verify wandb
 #   #   export HF_HOME=/pvcvolume/hf_cache
 #   #   huggingface-cli login   # Mistral-7B is gated
 #   #   bash run_entailment.sh
@@ -34,7 +35,7 @@ spec:
         k8s-app: assenthi-listwise
     spec:
       nodeSelector:
-        nvidia.com/gpu.product: NVIDIA-L4
+        nvidia.com/gpu.product: NVIDIA-RTX-A6000
       containers:
       - name: assenthi-listwise
         image: pytorch/pytorch:2.4.1-cuda12.4-cudnn9-devel
@@ -42,11 +43,11 @@ spec:
           limits:
             memory: 64Gi
             cpu: "16"
-            nvidia.com/gpu: "1"
+            nvidia.com/rtxa6000: "1"
           requests:
             memory: 48Gi
-            cpu: "12"
-            nvidia.com/gpu: "1"
+            cpu: "10"
+            nvidia.com/rtxa6000: "1"
         command: [ "sh", "-c", "sleep infinity" ]
         volumeMounts:
         - mountPath: /pvcvolume
