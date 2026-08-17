@@ -3,7 +3,7 @@
 #
 # Everything durable lives on the PVC (/pvcvolume); the container layer is
 # disposable. This script rewires a fresh container around the PVC:
-# sshd (for ssh/herdr access), PATH, HF cache, venv, and secrets.
+# sshd (for ssh access), PATH, HF cache, venv, tmux config, and secrets.
 #
 # First-time setup and the full walkthrough: NAUTILUS.md
 set -e
@@ -18,6 +18,10 @@ else
     echo "WARNING: /pvcvolume/authorized_keys missing - ssh key auth will fail" >&2
 fi
 pgrep -x sshd >/dev/null || /usr/sbin/sshd
+
+# tmux config lives on the PVC (ctrl+a prefix - ctrl+b would be swallowed by a
+# local herdr/tmux when attaching from inside one)
+[ -f /pvcvolume/tmux.conf ] && cp /pvcvolume/tmux.conf /root/.tmux.conf
 
 grep -q 'pvcvolume/bin' /root/.bashrc || cat >> /root/.bashrc <<'RC'
 export PATH=/pvcvolume/bin:$PATH

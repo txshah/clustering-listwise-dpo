@@ -1,9 +1,9 @@
 # Nautilus A6000 Setup
 
-How to run this project on a Nautilus (NRP) RTX A6000 pod and attach to it from a laptop with herdr.
+How to run this project on a Nautilus (NRP) RTX A6000 pod, with ssh access and a persistent tmux session for long runs.
 Each step is tagged with where it runs: **[laptop]**, **[pod]**, or **[browser]**.
 
-The connection chain: `herdr --remote` → `ssh nautilus-a6000` → ProxyCommand (`kubectl exec` → `nc :22`) → sshd in the pod → herdr server working out of `/pvcvolume`.
+The connection chain: `ssh nautilus-a6000` → ProxyCommand (`kubectl exec` → `nc :22`) → sshd in the pod → tmux session working out of `/pvcvolume`.
 
 The guiding rule: the container layer is disposable, the PVC is durable.
 Everything that must survive an eviction (repo, venv, HF cache, ssh key, secrets) lives on `/pvcvolume`, and `pod-init.sh` rewires a fresh container around it.
@@ -17,11 +17,7 @@ ls ~/.ssh/*.pub
 ssh-keygen -t ed25519
 ```
 
-Install kubectl (macOS: `brew install kubectl`; Linux: grab the binary from `dl.k8s.io`) and herdr:
-
-```bash
-curl -fsSL https://herdr.dev/install.sh | sh
-```
+Install kubectl (macOS: `brew install kubectl`; Linux: grab the binary from `dl.k8s.io`).
 
 ## 2. Nautilus kubeconfig [browser]
 
@@ -34,7 +30,7 @@ kubectl config set-context --current --namespace=<your-namespace>
 kubectl get pods   # should answer without errors (empty is fine)
 ```
 
-The whole ssh/herdr chain rides on kubectl auth.
+The whole ssh chain rides on kubectl auth.
 If the remote ever goes unreachable weeks from now, re-download this config first.
 
 ## 3. Deploy PVC + A6000 pod [laptop]
@@ -98,7 +94,7 @@ Host nautilus-a6000
     StrictHostKeyChecking accept-new
 ```
 
-Test it; this must work before herdr will:
+Test it:
 
 ```bash
 ssh nautilus-a6000 echo ok   # prints: ok
@@ -107,24 +103,33 @@ ssh nautilus-a6000 echo ok   # prints: ok
 Every new pod generates fresh host keys, so after an eviction ssh refuses with a MITM warning.
 That is expected here; clear it with `ssh-keygen -R nautilus-a6000` and reconnect.
 
-## 7. herdr in the pod, then attach [pod]
+## 7. tmux session in the pod [pod]
 
-Install herdr inside the pod and park the binary on the PVC (already on PATH via `pod-init.sh`):
-
-```bash
-curl -fsSL https://herdr.dev/install.sh | sh
-cp "$(command -v herdr)" /pvcvolume/bin/
-```
-
-Then from the laptop:
+`pod-init.sh` already apt-installed tmux.
+One-time: put a tmux config on the PVC.
+It uses `ctrl+a` as the prefix, because `ctrl+b` gets swallowed by a local herdr or tmux when you attach from inside one:
 
 ```bash
-herdr --remote nautilus-a6000
+cat > /pvcvolume/tmux.conf <<'EOF'
+set -g prefix C-a
+unbind C-b
+bind C-a send-prefix
+set -g mouse on
+set -g history-limit 100000
+EOF
+cp /pvcvolume/tmux.conf /root/.tmux.conf   # pod-init.sh does this on future boots
 ```
 
-Point the workspace at `/pvcvolume/clustering-listwise-dpo`.
-Detach with `ctrl+b q`; agents and terminals keep running on the pod.
-This replaces tmux for laptop-side disconnects.
+Daily use, from the laptop:
+
+```bash
+ssh nautilus-a6000
+tmux new -A -s main    # creates the session, or attaches if it exists
+```
+
+Launch long runs inside it.
+Detach with `ctrl+a d` (or just close the laptop; the session keeps running).
+Splits: `ctrl+a %` vertical, `ctrl+a "` horizontal.
 
 ## 8. After an eviction [laptop]
 
@@ -134,8 +139,9 @@ The short recovery path; everything of value was on the PVC:
 kubectl get pods                # confirm the new pod is Running
 kubectl exec -it deploy/assenthi-listwise-deployment -- bash /pvcvolume/clustering-listwise-dpo/pod-init.sh
 ssh-keygen -R nautilus-a6000    # new pod = new host key
-herdr --remote nautilus-a6000
+ssh nautilus-a6000
+tmux new -A -s main
 ```
 
-Training or eval runs do not survive the eviction itself; relaunch them.
+tmux sessions and running jobs do not survive the eviction itself; relaunch the runs.
 The pipeline scripts resume from what is on the PVC, and wandb shows the crashed run so you know where it died.

@@ -112,7 +112,7 @@ clustering-listwise-dpo/
 │   └── eval_gsm8k.py              # Greedy decoding + end accuracy on GSM8K test
 │
 ├── wandb_setup.py                 # Optional W&B tracking (auto-on when an API key is present)
-├── NAUTILUS.md                    # Nautilus (NRP) A6000 setup: pod, PVC env, ssh, herdr remote
+├── NAUTILUS.md                    # Nautilus (NRP) A6000 setup: pod, PVC env, ssh, tmux
 ├── pod-init.sh                    # Pod bootstrap, re-runnable after evictions (see NAUTILUS.md)
 ├── smoke_test_colab.ipynb         # Self-contained 10-question pipeline (DPO + listwise)
 └── entailment_run_colab.ipynb     # Colab wrapper: 4-arm 1000-question run (Drive persistence + repo scripts)
