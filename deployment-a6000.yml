@@ -4,6 +4,9 @@
 #
 # Tip -> Find and replace "assenthi-listwise" with the PVC name
 #
+# Full setup walkthrough (kubeconfig, PVC env, ssh access, herdr remote,
+# eviction recovery): see NAUTILUS.md. Pod bootstrap script: pod-init.sh.
+#
 # Verify the A6000 node label on your cluster if scheduling stalls:
 #   kubectl get nodes -L nvidia.com/gpu.product | grep -i a6000
 #
