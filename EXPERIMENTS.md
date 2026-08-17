@@ -41,12 +41,39 @@ aren't needed — `run_arms.sh score` fails loudly if the file is missing.
 
 ---
 
-## Tier 1 — Core comparison (~14 h total)
+## Tier 0 — Learning-rate sweep (~5 h, run FIRST)
 
-3 arms × 3 seeds (42/43/44) + base, full 1319-question test split.
+The current lr (3e-5) was adopted after observing 1e-6 leave the loss pinned at
+init — one data point, not a sweep. Since every arm shares the lr, a bad choice
+suppresses (or fakes) the arm differences, so nail it down before the core runs.
+
+Sweep on the `length` baseline arm (tuning on the baseline, not the novel arms,
+avoids biasing the comparison toward our method), one seed, 500-question eval:
 
 ```bash
-bash run_arms.sh                      # score → build → train ×9 → eval ×10 → summary
+bash run_arms.sh score build          # one-time: scoring + datasets
+for lr in 1e-5 3e-5 1e-4; do
+    ARMS=length SEEDS=42 LR=$lr bash run_arms.sh train
+done
+for lr in 1e-5 3e-5 1e-4; do
+    ARMS=length SEEDS=42 LR=$lr EVAL_LIMIT=500 bash run_arms.sh eval
+done
+```
+
+3 trainings (~1 h each) + 3 evals (~10 min each at limit 500) + the shared base
+eval. Pick the lr by **final maj@8** (W&B group `arms-1000`, filter `lr:` tags),
+sanity-checked against the loss curves: the winner should show a smooth decrease
+from 3.37 without oscillation (1e-4 risk) and without flatlining (1e-5 risk).
+If the winner isn't 3e-5, set `learning_rate` in `listwise_config.yaml` before
+Tier 1. Borderline (two lrs within noise)? Prefer the smaller one.
+
+## Tier 1 — Core comparison (~10 h total)
+
+3 arms × **2 seeds** (42/43) + base, full 1319-question test split, at the
+Tier-0 winning lr.
+
+```bash
+bash run_arms.sh                      # score → build → train ×6 → eval ×7 → summary
 ```
 
 Or step by step (each step is independently re-runnable; training skips
@@ -55,8 +82,8 @@ finished output dirs, eval resumes per-question):
 ```bash
 bash run_arms.sh score                # NLI scoring (deberta-v3-large) (~30-45 min)
 bash run_arms.sh build                # 3 datasets                  (seconds)
-bash run_arms.sh train                # 9 runs × ~1 h               (~9 h)
-bash run_arms.sh eval                 # 10 evals × ~25 min          (~4.5 h)
+bash run_arms.sh train                # 6 runs × ~1 h               (~6 h)
+bash run_arms.sh eval                 # 7 evals × ~25 min           (~3 h)
 bash run_arms.sh summary              # mean ± std table, no GPU
 uv run graphs/plot_arms.py            # figure → graphs/arms_accuracy.png
 ```
@@ -70,7 +97,7 @@ over-read them.
 
 ## Tier 2 — Gate sweeps (~5 h, run after Tier 1)
 
-One seed each, `EVAL_LIMIT=500` to keep it cheap. Promote any winner to 3 seeds
+One seed each, `EVAL_LIMIT=500` to keep it cheap. Promote any winner to 2 seeds
 + full eval before believing it.
 
 ```bash
@@ -103,8 +130,8 @@ N_QUESTIONS=7473 bash run_entailment.sh prepare generate process   # ~7 h, resum
 N_QUESTIONS=7473 SEEDS=42 bash run_arms.sh score build
 # then train/eval just the two arms of interest (edit ARMS env or run manually)
 
-# lr sanity on the winner (rules out "the gap is an lr artifact")
-# edit learning_rate in listwise_config.yaml → 1e-5 / 1e-4, retrain best arm + length
+# (lr already swept in Tier 0 — if Tier 3 changes data scale a quick re-check
+#  of the winning lr on the full-data length arm is cheap insurance)
 ```
 
 ---
@@ -124,7 +151,9 @@ group page is the experiment dashboard. Naming scheme:
 | `eval-arm_<arm>_s<seed>-1000` | `eval` | one adapter eval |
 
 Tags on training runs: `arm:<arm>`, `seed:<seed>`, `tag:1000` — filter by
-`arm:` to overlay all seeds of one arm.
+`arm:` to overlay all seeds of one arm. lr-sweep runs (Tier 0) additionally get
+an `lr:<value>` tag and an `_lr<value>` infix in run names and output dirs, so
+they never mix with the main runs.
 
 **During training, watch (job_type = `train-listwise`):**
 - `train/loss` — must *decrease from ~3.37* (that's `-log(1/5)·Σλ`, the

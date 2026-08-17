@@ -16,12 +16,17 @@
 #   EVAL_LIMIT=500 bash run_arms.sh eval   # quicker eval pass
 #   bash run_arms.sh summary         # aggregate finished evals (mean±std over seeds)
 #
-# Training runs once per arm per seed (SEEDS, default "42 43 44") and skips
+# Training runs once per arm per seed (SEEDS, default "42 43") and skips
 # output dirs that already contain an adapter, so the whole script is re-runnable.
+#
+# lr sweep: LR=1e-4 SEEDS=42 bash run_arms.sh train eval
+#   LR overrides the config learning_rate and suffixes every output/result
+#   (arm_gated_lg_1000_lr1e-4_s42), so sweep runs never collide with the
+#   main runs at the config lr.
 #
 # Parameters (env vars):
 #   MODEL=mistralai/Mistral-7B-v0.1 N_QUESTIONS=1000 THRESHOLD=0.5
-#   SEEDS="42 43 44"  EVAL_LIMIT=<empty = full test split>
+#   SEEDS="42 43"  LR=<empty = config lr>  EVAL_LIMIT=<empty = full test split>
 #   N_SHOT=8 EVAL_SAMPLES=10 MAJ_K=8 PASS_K=1,5,10 EVAL_TEMP=0.8
 #   RESULTS_DIR=results WANDB_GROUP=arms-${N_QUESTIONS}
 
@@ -31,7 +36,8 @@ cd "$(dirname "$0")"
 MODEL="${MODEL:-mistralai/Mistral-7B-v0.1}"
 N_QUESTIONS="${N_QUESTIONS:-1000}"
 THRESHOLD="${THRESHOLD:-0.5}"
-SEEDS="${SEEDS:-42 43 44}"     # one training run per arm per seed
+SEEDS="${SEEDS:-42 43}"        # one training run per arm per seed
+LR="${LR:-}"                   # override learning_rate; runs get an _lr<LR> suffix
 EVAL_LIMIT="${EVAL_LIMIT:-}"
 
 # Paper eval protocol (Mistral 7B paper: 8-shot maj@8; one pass gives pass@k too)
@@ -48,7 +54,7 @@ TAG="${N_QUESTIONS}"
 PROCESSED="generation/traces/processed/results_${TAG}.jsonl"
 SCORED_LG="generation/traces/processed/results_${TAG}_scored_lg.jsonl"
 
-ARMS="length gated_lg ungated_lg"
+ARMS="${ARMS:-length gated_lg ungated_lg}"   # override to sweep a subset, e.g. ARMS=length
 
 step_score() {
     echo "=== Score: bidirectional entailment (nli-deberta-v3-large) ==="
@@ -72,22 +78,28 @@ step_build() {
 }
 
 step_train() {
+    LR_SUFFIX=""
+    LR_FLAG=""
+    if [ -n "$LR" ]; then
+        LR_SUFFIX="_lr${LR}"
+        LR_FLAG="--learning_rate $LR"
+    fi
     for arm in $ARMS; do
         for seed in $SEEDS; do
-            out="outputs/arm_${arm}_${TAG}_s${seed}"
+            out="outputs/arm_${arm}_${TAG}${LR_SUFFIX}_s${seed}"
             if [ -f "$out/adapter_model.safetensors" ]; then
-                echo "=== Train: $arm seed=$seed — already done, skipping ==="
+                echo "=== Train: $arm seed=$seed${LR:+ lr=$LR} — already done, skipping ==="
                 continue
             fi
-            echo "=== Train: $arm seed=$seed ==="
+            echo "=== Train: $arm seed=$seed${LR:+ lr=$LR} ==="
             uv run training/train_listwise.py \
                 --config training/configs/listwise_config.yaml \
                 --dataset_path "generation/traces/arm_${arm}_${TAG}.jsonl" \
                 --output_dir "$out" \
-                --seed "$seed" \
+                --seed "$seed" $LR_FLAG \
                 --wandb_group "$WANDB_GROUP" \
-                --wandb_run_name "train-${arm}-${TAG}-s${seed}" \
-                --wandb_tags "arm:${arm},seed:${seed},tag:${TAG}"
+                --wandb_run_name "train-${arm}-${TAG}${LR_SUFFIX}-s${seed}" \
+                --wandb_tags "arm:${arm},seed:${seed},tag:${TAG}${LR:+,lr:${LR}}"
         done
     done
 }
@@ -107,23 +119,27 @@ run_one_eval() {
 }
 
 step_eval() {
+    LR_SUFFIX=""
+    [ -n "$LR" ] && LR_SUFFIX="_lr${LR}"
     run_one_eval base "$MODEL"
     for arm in $ARMS; do
         for seed in $SEEDS; do
-            run_one_eval "arm_${arm}_s${seed}" "outputs/arm_${arm}_${TAG}_s${seed}"
+            run_one_eval "arm_${arm}${LR_SUFFIX}_s${seed}" \
+                         "outputs/arm_${arm}_${TAG}${LR_SUFFIX}_s${seed}"
         done
     done
     step_summary
 }
 
 step_summary() {
-    echo "=== Summary: mean ± std across seeds (maj@${MAJ_K} + pass@k) ==="
-    RESULTS_DIR="$RESULTS_DIR" TAG="$TAG" ARMS="$ARMS" SEEDS="$SEEDS" MAJ_K="$MAJ_K" \
+    echo "=== Summary: mean ± std across seeds (maj@${MAJ_K} + pass@k)${LR:+ [lr=$LR]} ==="
+    RESULTS_DIR="$RESULTS_DIR" TAG="$TAG" ARMS="$ARMS" SEEDS="$SEEDS" MAJ_K="$MAJ_K" LR="$LR" \
     uv run python - <<'EOF'
 import json, os, statistics
 
 results_dir, tag = os.environ["RESULTS_DIR"], os.environ["TAG"]
 arms, seeds = os.environ["ARMS"].split(), os.environ["SEEDS"].split()
+lr_suffix = f"_lr{os.environ['LR']}" if os.environ.get("LR") else ""
 metrics_keys = [f"maj@{os.environ['MAJ_K']}", "pass@1", "pass@5", "pass@10"]
 
 def show(name, runs):
@@ -151,7 +167,7 @@ base = load(os.path.join(results_dir, f"base_{tag}.json"))
 show("base", [base] if base else [])
 for arm in arms:
     runs = [m for s in seeds
-            if (m := load(os.path.join(results_dir, f"arm_{arm}_s{s}_{tag}.json")))]
+            if (m := load(os.path.join(results_dir, f"arm_{arm}{lr_suffix}_s{s}_{tag}.json")))]
     show(arm, runs)
 EOF
 }

@@ -39,6 +39,8 @@ def main():
     parser.add_argument("--output_dir",   default=None, help="Override config output_dir")
     parser.add_argument("--seed",         type=int, default=None,
                         help="Override config seed (for multi-seed sweeps)")
+    parser.add_argument("--learning_rate", type=float, default=None,
+                        help="Override config learning_rate (for lr sweeps)")
     add_wandb_args(parser, default_job_type="train-listwise")
     args = parser.parse_args()
 
@@ -49,6 +51,8 @@ def main():
         cfg["output_dir"] = args.output_dir
     if args.seed is not None:
         cfg["seed"] = args.seed
+    if args.learning_rate is not None:
+        cfg["learning_rate"] = args.learning_rate
 
     # Init W&B before the Trainer so HF's WandbCallback attaches to this run.
     run_name = args.wandb_run_name or f"listwise-{os.path.basename(cfg['output_dir'].rstrip('/'))}"
