@@ -111,6 +111,7 @@ clustering-listwise-dpo/
 ├── evaluation/
 │   └── eval_gsm8k.py              # Greedy decoding + end accuracy on GSM8K test
 │
+├── wandb_setup.py                 # Optional W&B tracking (auto-on when an API key is present)
 ├── smoke_test_colab.ipynb         # Self-contained 10-question pipeline (DPO + listwise)
 └── entailment_run_colab.ipynb     # Colab wrapper: 4-arm 1000-question run (Drive persistence + repo scripts)
 ```
@@ -128,12 +129,24 @@ accelerate==1.13.0
 datasets==4.8.4
 pyyaml
 math-verify   # sympy-based answer checking (correctness oracle in utils.py + eval_gsm8k.py)
+wandb         # optional: run tracking, see below
 ```
 
 Install:
 ```bash
-pip install "torch==2.4.1" "transformers==4.45.1" "trl==0.9.6" "peft==0.13.2" "accelerate==1.13.0" "datasets==4.8.4" pyyaml math-verify
+pip install "torch==2.4.1" "transformers==4.45.1" "trl==0.9.6" "peft==0.13.2" "accelerate==1.13.0" "datasets==4.8.4" pyyaml math-verify wandb
 ```
+
+---
+
+## Run Tracking (Weights & Biases, optional)
+
+Every training and eval script logs to W&B automatically when an API key is available, and silently skips logging otherwise (so Colab never hangs on a login prompt).
+Enable it once per machine with `wandb login`, or by setting the `WANDB_API_KEY` env var; on Colab, add a `WANDB_API_KEY` secret and the notebook picks it up.
+Runs land in the `clustering-listwise-dpo` project (override with `WANDB_PROJECT`) and are named after the output dir (training) or `eval-<model>` (eval), with job types `train-listwise` / `train-dpo` / `eval`.
+Training runs record the full yaml config and loss curves; eval runs record accuracy and upload the `results_*.json` summary and per-question detail files.
+Force logging off with `WANDB_DISABLED=true`.
+The shared logic lives in `wandb_setup.py`.
 
 ---
 

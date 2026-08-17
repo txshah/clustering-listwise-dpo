@@ -11,11 +11,16 @@ Usage:
 
 import argparse
 import json
+import os
 import re
+import sys
 import torch
 from tqdm import tqdm
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from wandb_setup import init_wandb
 
 # math-verify (optional, pip install math-verify): sympy-based answer
 # equivalence as used by lighteval / Open R1.  When installed it replaces the
@@ -124,7 +129,15 @@ def main():
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Answer scorer: {'math-verify' if mv_parse is not None else 'regex fallback'}")
+    scorer = "math-verify" if mv_parse is not None else "regex fallback"
+    print(f"Answer scorer: {scorer}")
+
+    # Start tracking before the slow parts so aborted evals still show up
+    tracking = init_wandb(
+        run_name = f"eval-{os.path.basename(args.model.rstrip('/'))}",
+        job_type = "eval",
+        config   = {**vars(args), "scorer": scorer, "decoding": "greedy"},
+    )
 
     print(f"Loading model {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -157,6 +170,16 @@ def main():
         for r in summary["results"]:
             f.write(json.dumps(r) + "\n")
     print(f"Per-question results → {detail_path}")
+
+    if tracking == "wandb":
+        import wandb
+        wandb.log({"accuracy": summary["accuracy"],
+                   "correct":  summary["correct"],
+                   "total":    summary["total"]})
+        # keep the result files with the run so they survive Colab disconnects
+        wandb.save(args.output, policy="now")
+        wandb.save(detail_path, policy="now")
+        wandb.finish()
 
 
 if __name__ == "__main__":

@@ -22,7 +22,9 @@ from trl import DPOTrainer, DPOConfig
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../generation/code"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from utils import load_jsonl
+from wandb_setup import init_wandb
 
 
 def load_config(path: str) -> dict:
@@ -68,6 +70,13 @@ def main():
     if args.output_dir:
         cfg["output_dir"] = args.output_dir
 
+    # Start tracking before the slow parts so aborted runs still show up
+    report_to = init_wandb(
+        run_name = os.path.basename(cfg["output_dir"].rstrip("/")),
+        job_type = "train-dpo",
+        config   = cfg,
+    )
+
     tokenizer = AutoTokenizer.from_pretrained(cfg["model_name_or_path"])
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -104,7 +113,7 @@ def main():
         bf16                        = torch.cuda.is_available(),
         fp16                        = False,  # MPS + torch<2.5 doesn't support accelerate fp16
         remove_unused_columns       = False,
-        report_to                   = "none",  # no wandb prompt on Colab
+        report_to                   = report_to,  # "wandb" when a key is available, else "none"
     )
 
     trainer = DPOTrainer(
