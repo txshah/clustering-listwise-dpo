@@ -2,12 +2,11 @@
 
 ## What This Is
 
-Listwise preference optimization (LIPO-λ) on Mistral-7B for math reasoning (GSM8K). The main experiment is a **4-arm comparison** of how the preference lists are labeled and ranked — all arms share the same trace pool, the same LIPO-λ loss, and the same 1 chosen + 4 ranked rejected shape, and are scored against the untrained base model:
+Listwise preference optimization (LIPO-λ) on Mistral-7B for math reasoning (GSM8K). The main experiment is a **3-arm comparison** of how the preference lists are labeled and ranked — all arms share the same trace pool, the same LIPO-λ loss, and the same 1 chosen + 4 ranked rejected shape, and are scored against the untrained base model:
 
 | Arm | Gate (good vs bad) | Ranking within lists |
 |---|---|---|
 | `length` | answer correctness | trace length |
-| `gated_sm` | answer correctness | bidirectional NLI entailment (deberta-v3-small) |
 | `gated_lg` | answer correctness | bidirectional NLI entailment (deberta-v3-large) |
 | `ungated_lg` | entailment score ≥ threshold only (PORT-style, correctness ignored) | entailment |
 
@@ -126,10 +125,10 @@ clustering-listwise-dpo/
 │   └── eval_gsm8k.py              # 8-shot maj@8 + pass@k on GSM8K test (vLLM/HF backends)
 │
 ├── graphs/
-│   └── plot_arms.py               # Accuracy bar chart for the 4-arm run
+│   └── plot_arms.py               # Accuracy bar chart for the 3-arm run
 │
 ├── wandb_utils.py                 # Shared W&B init (used by both trainers + eval)
-├── run_arms.sh                    # 4-arm experiment: score → build → train → eval
+├── run_arms.sh                    # 3-arm experiment: score → build → train → eval
 ├── run_entailment.sh              # Steps 1-3: prepare → generate → process
 └── smoke_test.sh                  # Full pipeline on 10 questions
 ```
@@ -290,14 +289,13 @@ bash run_arms.sh eval
 
 ---
 
-### The 4-arm experiment (`run_arms.sh`)
+### The 3-arm experiment (`run_arms.sh`)
 
-The main experiment: four LIPO-λ listwise arms sharing one trace pool, all evaluated against the untrained base model.
+The main experiment: three LIPO-λ listwise arms sharing one trace pool, all evaluated against the untrained base model.
 
 | Arm | Gate | Ranking |
 |---|---|---|
 | `length` | correctness | trace length |
-| `gated_sm` | correctness | bidirectional entailment (nli-deberta-v3-**small**) |
 | `gated_lg` | correctness | bidirectional entailment (nli-deberta-v3-**large**) |
 | `ungated_lg` | **entailment only** (score ≥ threshold, correctness ignored — PORT-style) | entailment |
 
@@ -313,7 +311,7 @@ Env knobs: `MODEL N_QUESTIONS THRESHOLD EVAL_LIMIT N_SHOT EVAL_SAMPLES MAJ_K PAS
 
 ### Paper evaluation (maj@8 + pass@k)
 
-`run_arms.sh eval` runs base + all four arms through the identical protocol and puts them in one W&B group so they overlay. Backend flags on `eval_gsm8k.py`:
+`run_arms.sh eval` runs base + all three arms through the identical protocol and puts them in one W&B group so they overlay. Backend flags on `eval_gsm8k.py`:
 
 ```
 --backend auto|vllm|hf         # auto: vLLM if importable, else transformers
@@ -332,7 +330,7 @@ Env knobs: `MODEL N_QUESTIONS THRESHOLD EVAL_LIMIT N_SHOT EVAL_SAMPLES MAJ_K PAS
 
 Trace generation uses the same backends: 10 questions × 10 samples × 256 tokens ran in ~6 s on vLLM (vs minutes on HF), which extrapolates to roughly **7 h for the full 7473 × 30 × 512-token generation run** — checkpointed, so it survives interruptions via `--resume`.
 
-So all five evals (base + 4 arms) finish in under two hours on vLLM. Practical notes:
+So all four evals (base + 3 arms) finish in about 100 minutes on vLLM. Practical notes:
 
 - Every run writes per-question records incrementally and `run_arms.sh` passes `--resume`, so an interrupted job restarts where it stopped (delete `results/*_detail.jsonl` to force a clean rerun).
 - vLLM's engine schedules everything itself — `--vllm_chunk` (default 128) only sets how often records hit disk. `BATCH_SIZE` matters only on the HF fallback; there, 4 beat 8 (a batch waits on its slowest sequence).

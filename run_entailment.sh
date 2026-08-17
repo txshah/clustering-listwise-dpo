@@ -20,7 +20,7 @@ set -e
 cd "$(dirname "$0")"
 
 MODEL="${MODEL:-mistralai/Mistral-7B-v0.1}"
-NLI_MODEL="${NLI_MODEL:-cross-encoder/nli-deberta-v3-small}"
+NLI_MODEL="${NLI_MODEL:-cross-encoder/nli-deberta-v3-large}"
 N_QUESTIONS="${N_QUESTIONS:-1000}"
 N_SAMPLES="${N_SAMPLES:-10}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"

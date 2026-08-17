@@ -32,10 +32,9 @@ INK_2   = "#52514e"
 RED     = "#e34948"   # collapsed run marker
 
 ARMS = [
-    ("base",       "base\nMistral-7B",             GRAY),
-    ("length",     "length-ranked\n(gated)",        BLUE),
-    ("gated_sm",   "entailment gated\n(small NLI)", BLUE),
-    ("gated_lg",   "entailment gated\n(large NLI)", BLUE),
+    ("base",       "base\nMistral-7B",               GRAY),
+    ("length",     "length-ranked\n(gated)",          BLUE),
+    ("gated_lg",   "entailment gated\n(large NLI)",   BLUE),
     ("ungated_lg", "entailment ungated\n(large NLI)", BLUE),
 ]
 
@@ -159,7 +158,7 @@ def main():
                   f"a={cfg.get('lora_alpha', 32)}"),
         ("optim", f"lr {cfg.get('learning_rate')}, "
                   f"{cfg.get('num_train_epochs')} epochs, batch {eff_batch}"),
-        ("NLI",   "nli-deberta-v3 sm / lg"),
+        ("NLI",   "nli-deberta-v3-large"),
         ("",      "bidir min vs shortest correct"),
     ]
     panel = "hyperparameters\n" + "\n".join(f"{k:>6}  {v}" for k, v in hp)

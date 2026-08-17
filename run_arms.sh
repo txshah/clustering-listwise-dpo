@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Four-arm comparison: length baseline, gated small, gated large, ungated large.
+# Three-arm comparison: length baseline, gated large, ungated large.
 #
 # Arms (all trained with the same LIPO-lambda loss and 1 chosen + 4 rejected shape):
 #   length      gated: chosen = shortest correct, rejected ranked by length
-#   gated_sm    gated: ranked by bidirectional entailment (nli-deberta-v3-small)
 #   gated_lg    gated: ranked by bidirectional entailment (nli-deberta-v3-large)
 #   ungated_lg  no gate: good/bad from binarized large-NLI score (PORT-style)
 #
@@ -47,29 +46,23 @@ mkdir -p "$RESULTS_DIR"
 
 TAG="${N_QUESTIONS}"
 PROCESSED="generation/traces/processed/results_${TAG}.jsonl"
-SCORED_SM="generation/traces/processed/results_${TAG}_scored_sm.jsonl"
 SCORED_LG="generation/traces/processed/results_${TAG}_scored_lg.jsonl"
 
-ARMS="length gated_sm gated_lg ungated_lg"
+ARMS="length gated_lg ungated_lg"
 
 step_score() {
-    echo "=== Score: bidirectional entailment, small then large NLI ==="
-    uv run generation/code/score_entailment.py \
-        --input "$PROCESSED" --output "$SCORED_SM" \
-        --model cross-encoder/nli-deberta-v3-small --batch_size 32
+    echo "=== Score: bidirectional entailment (nli-deberta-v3-large) ==="
     uv run generation/code/score_entailment.py \
         --input "$PROCESSED" --output "$SCORED_LG" \
         --model cross-encoder/nli-deberta-v3-large --batch_size 16
 }
 
 step_build() {
-    echo "=== Build: 4 datasets ==="
+    echo "=== Build: 3 datasets ==="
+    # length ranking ignores the scores; sharing the scored file keeps one input
     uv run generation/code/build_listwise.py \
-        --input "$SCORED_SM" --output "generation/traces/arm_length_${TAG}.jsonl" \
+        --input "$SCORED_LG" --output "generation/traces/arm_length_${TAG}.jsonl" \
         --ranking_method length
-    uv run generation/code/build_listwise.py \
-        --input "$SCORED_SM" --output "generation/traces/arm_gated_sm_${TAG}.jsonl" \
-        --ranking_method entailment
     uv run generation/code/build_listwise.py \
         --input "$SCORED_LG" --output "generation/traces/arm_gated_lg_${TAG}.jsonl" \
         --ranking_method entailment

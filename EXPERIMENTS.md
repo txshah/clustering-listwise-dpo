@@ -6,13 +6,12 @@ All times are measured on this pod (1× RTX A6000 48GB, vLLM backends).
 ## The idea being tested
 
 Does **entailment-based construction of preference lists** improve LIPO-λ listwise
-training over correctness/length-only construction? Four arms, identical loss and
+training over correctness/length-only construction? Three arms, identical loss and
 list shape (1 chosen + 4 ranked rejected), identical trace pool:
 
 | Arm | "Good" label (gate) | Reject ranking | NLI model |
 |---|---|---|---|
 | `length` | answer correctness (math-verify) | shortest wrong first | none |
-| `gated_sm` | answer correctness | entailment vs reference | deberta-v3-small |
 | `gated_lg` | answer correctness | entailment vs reference | deberta-v3-large |
 | `ungated_lg` | entailment ≥ 0.5 only (PORT-style, correctness ignored) | entailment | deberta-v3-large |
 
@@ -24,7 +23,6 @@ avg@1 from one 10-sample pass (8-shot, T=0.8, scored by math-verify).
 
 Key pairwise reads:
 - `length` vs `gated_*` → does entailment **ranking** matter?
-- `gated_sm` vs `gated_lg` → does NLI **quality** matter?
 - `gated_lg` vs `ungated_lg` → does the entailment **gate** (labels) matter? ← the headline comparison
 
 ---
@@ -43,22 +41,22 @@ aren't needed — `run_arms.sh score` fails loudly if the file is missing.
 
 ---
 
-## Tier 1 — Core comparison (~18 h total)
+## Tier 1 — Core comparison (~14 h total)
 
-4 arms × 3 seeds (42/43/44) + base, full 1319-question test split.
+3 arms × 3 seeds (42/43/44) + base, full 1319-question test split.
 
 ```bash
-bash run_arms.sh                      # score → build → train ×12 → eval ×13 → summary
+bash run_arms.sh                      # score → build → train ×9 → eval ×10 → summary
 ```
 
 Or step by step (each step is independently re-runnable; training skips
 finished output dirs, eval resumes per-question):
 
 ```bash
-bash run_arms.sh score                # NLI scoring, sm + lg        (~30-60 min)
-bash run_arms.sh build                # 4 datasets                  (seconds)
-bash run_arms.sh train                # 12 runs × ~1 h              (~12 h)
-bash run_arms.sh eval                 # 13 evals × ~25 min          (~5.5 h)
+bash run_arms.sh score                # NLI scoring (deberta-v3-large) (~30-45 min)
+bash run_arms.sh build                # 3 datasets                  (seconds)
+bash run_arms.sh train                # 9 runs × ~1 h               (~9 h)
+bash run_arms.sh eval                 # 10 evals × ~25 min          (~4.5 h)
 bash run_arms.sh summary              # mean ± std table, no GPU
 uv run graphs/plot_arms.py            # figure → graphs/arms_accuracy.png
 ```
