@@ -9,3 +9,7 @@ venv/
 
 # Weights & Biases local run files
 wandb/
+
+# Eval outputs
+results/
+*_detail.jsonl

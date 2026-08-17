@@ -42,7 +42,7 @@ Usage:
 import argparse
 import os
 from tqdm import tqdm
-from utils import load_jsonl, save_jsonl
+from utils import load_jsonl, save_jsonl, format_prompt
 
 
 def pool_traces(item: dict) -> list[tuple[str, float]]:
@@ -92,7 +92,8 @@ def build_entailment_list(
         ranked_bads = bads[:n_bad]
         for chosen, chosen_score in goods[:n_good]:
             record = {
-                "prompt": item["question"],
+                # Same scaffold as generation and eval (utils.format_prompt)
+                "prompt": format_prompt(item["question"]),
                 "chosen": chosen,
             }
             for i, (bad, _) in enumerate(ranked_bads, start=1):

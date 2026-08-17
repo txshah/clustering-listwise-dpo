@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Entailment run — full pipeline on N_QUESTIONS (default 1000), then LIPO training + eval.
-# Mirrors entailment_run_colab.ipynb but uses the repo scripts, sized for a single H100.
+# Sized for a single A6000; generation and eval use the vLLM backend automatically.
 #
 # Usage:
 #   bash run_entailment.sh                # run all steps (1000 questions, threshold 0.5)
@@ -40,24 +40,25 @@ EVAL_OUT="results_listwise_entailment_${TAG}_t${THRESHOLD}.json"
 
 step_prepare() {
     echo "=== Step 1: prepare ${N_QUESTIONS} questions ==="
-    python generation/code/prepare_questions.py \
+    uv run generation/code/prepare_questions.py \
         --output "$QUESTIONS" \
         --limit "$N_QUESTIONS"
 }
 
 step_generate() {
     echo "=== Step 2: generate traces (${N_QUESTIONS} questions x ${N_SAMPLES} samples) ==="
-    python generation/code/generate_traces.py \
+    uv run generation/code/generate_traces.py \
         --input "$QUESTIONS" \
         --output "$RAW" \
         --model "$MODEL" \
         --n_samples "$N_SAMPLES" \
-        --max_new_tokens "$MAX_NEW_TOKENS"
+        --max_new_tokens "$MAX_NEW_TOKENS" \
+        --resume
 }
 
 step_process() {
     echo "=== Step 3: sort correct / wrong (length_window=${LENGTH_WINDOW}) ==="
-    python generation/code/process_traces.py \
+    uv run generation/code/process_traces.py \
         --input "$RAW" \
         --output "$PROCESSED" \
         --length_window "$LENGTH_WINDOW"
@@ -65,7 +66,7 @@ step_process() {
 
 step_score() {
     echo "=== Step 4: NLI entailment scoring ==="
-    python generation/code/score_entailment.py \
+    uv run generation/code/score_entailment.py \
         --input "$PROCESSED" \
         --output "$SCORED" \
         --model "$NLI_MODEL" \
@@ -74,7 +75,7 @@ step_score() {
 
 step_build() {
     echo "=== Step 5: build ${N_GOOD}:${N_BAD} entailment lists (threshold=${THRESHOLD}) ==="
-    python generation/code/build_entailment_list.py \
+    uv run generation/code/build_entailment_list.py \
         --input "$SCORED" \
         --output "$PAIRS" \
         --threshold "$THRESHOLD" \
@@ -84,17 +85,19 @@ step_build() {
 
 step_train() {
     echo "=== Step 6: LIPO-lambda listwise training ==="
-    python training/train_listwise.py \
+    uv run training/train_listwise.py \
         --config training/configs/listwise_config.yaml \
         --dataset_path "$PAIRS" \
         --output_dir "$OUTPUT_DIR"
 }
 
 step_eval() {
-    echo "=== Step 7: evaluate on GSM8K test split ==="
-    python evaluation/eval_gsm8k.py \
+    echo "=== Step 7: evaluate on GSM8K test (8-shot maj@8 + pass@10/5/1) ==="
+    uv run evaluation/eval_gsm8k.py \
         --model "$OUTPUT_DIR" \
-        --output "$EVAL_OUT"
+        --n_shot 8 --n_samples 10 --maj_k 8 --pass_k 1,5,10 \
+        --output "$EVAL_OUT" \
+        --wandb_group "entailment-${TAG}" --resume
     cat "$EVAL_OUT"
 }
 

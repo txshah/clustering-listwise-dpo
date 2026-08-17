@@ -26,8 +26,17 @@ cd "$(dirname "$0")"
 MODEL="${MODEL:-mistralai/Mistral-7B-v0.1}"
 N_QUESTIONS="${N_QUESTIONS:-1000}"
 THRESHOLD="${THRESHOLD:-0.5}"
-EVAL_BATCH="${EVAL_BATCH:-8}"
 EVAL_LIMIT="${EVAL_LIMIT:-}"
+
+# Paper eval protocol (Mistral 7B paper: 8-shot maj@8; one pass gives pass@k too)
+N_SHOT="${N_SHOT:-8}"
+EVAL_SAMPLES="${EVAL_SAMPLES:-10}"
+MAJ_K="${MAJ_K:-8}"
+PASS_K="${PASS_K:-1,5,10}"
+EVAL_TEMP="${EVAL_TEMP:-0.8}"
+RESULTS_DIR="${RESULTS_DIR:-results}"
+WANDB_GROUP="${WANDB_GROUP:-arms-${N_QUESTIONS}}"
+mkdir -p "$RESULTS_DIR"
 
 TAG="${N_QUESTIONS}"
 PROCESSED="generation/traces/processed/results_${TAG}.jsonl"
@@ -38,26 +47,26 @@ ARMS="length gated_sm gated_lg ungated_lg"
 
 step_score() {
     echo "=== Score: bidirectional entailment, small then large NLI ==="
-    python generation/code/score_entailment.py \
+    uv run generation/code/score_entailment.py \
         --input "$PROCESSED" --output "$SCORED_SM" \
         --model cross-encoder/nli-deberta-v3-small --batch_size 32
-    python generation/code/score_entailment.py \
+    uv run generation/code/score_entailment.py \
         --input "$PROCESSED" --output "$SCORED_LG" \
         --model cross-encoder/nli-deberta-v3-large --batch_size 16
 }
 
 step_build() {
     echo "=== Build: 4 datasets ==="
-    python generation/code/build_listwise.py \
+    uv run generation/code/build_listwise.py \
         --input "$SCORED_SM" --output "generation/traces/arm_length_${TAG}.jsonl" \
         --ranking_method length
-    python generation/code/build_listwise.py \
+    uv run generation/code/build_listwise.py \
         --input "$SCORED_SM" --output "generation/traces/arm_gated_sm_${TAG}.jsonl" \
         --ranking_method entailment
-    python generation/code/build_listwise.py \
+    uv run generation/code/build_listwise.py \
         --input "$SCORED_LG" --output "generation/traces/arm_gated_lg_${TAG}.jsonl" \
         --ranking_method entailment
-    python generation/code/build_entailment_list.py \
+    uv run generation/code/build_entailment_list.py \
         --input "$SCORED_LG" --output "generation/traces/arm_ungated_lg_${TAG}.jsonl" \
         --threshold "$THRESHOLD"
 }
@@ -65,29 +74,36 @@ step_build() {
 step_train() {
     for arm in $ARMS; do
         echo "=== Train: $arm ==="
-        python training/train_listwise.py \
+        uv run training/train_listwise.py \
             --config training/configs/listwise_config.yaml \
             --dataset_path "generation/traces/arm_${arm}_${TAG}.jsonl" \
             --output_dir "outputs/arm_${arm}_${TAG}"
     done
 }
 
-step_eval() {
-    LIMIT_FLAG=""
+run_one_eval() {
+    local name="$1" model="$2"
+    local LIMIT_FLAG=""
     [ -n "$EVAL_LIMIT" ] && LIMIT_FLAG="--limit $EVAL_LIMIT"
-    echo "=== Eval: base model ==="
-    python evaluation/eval_gsm8k.py \
-        --model "$MODEL" --output "results_base_${TAG}.json" \
-        --batch_size "$EVAL_BATCH" $LIMIT_FLAG
+    echo "=== Eval: $name (${N_SHOT}-shot, ${EVAL_SAMPLES} samples @ T=${EVAL_TEMP}) ==="
+    uv run evaluation/eval_gsm8k.py \
+        --model "$model" \
+        --n_shot "$N_SHOT" --n_samples "$EVAL_SAMPLES" \
+        --maj_k "$MAJ_K" --pass_k "$PASS_K" --temperature "$EVAL_TEMP" \
+        --output "$RESULTS_DIR/${name}_${TAG}.json" \
+        --wandb_group "$WANDB_GROUP" --wandb_run_name "eval-${name}-${TAG}" \
+        --resume $LIMIT_FLAG
+}
+
+step_eval() {
+    run_one_eval base "$MODEL"
     for arm in $ARMS; do
-        echo "=== Eval: $arm ==="
-        python evaluation/eval_gsm8k.py \
-            --model "outputs/arm_${arm}_${TAG}" --output "results_arm_${arm}_${TAG}.json" \
-            --batch_size "$EVAL_BATCH" $LIMIT_FLAG
+        run_one_eval "arm_${arm}" "outputs/arm_${arm}_${TAG}"
     done
-    echo "=== Summary ==="
-    for f in "results_base_${TAG}.json" $(for a in $ARMS; do echo "results_arm_${a}_${TAG}.json"; done); do
-        [ -f "$f" ] && echo "$f: $(python -c "import json;print(json.load(open('$f'))['accuracy'])")"
+    echo "=== Summary (maj@${MAJ_K} | pass@k) ==="
+    for name in base $(for a in $ARMS; do echo "arm_${a}"; done); do
+        f="$RESULTS_DIR/${name}_${TAG}.json"
+        [ -f "$f" ] && echo "$name: $(uv run python -c "import json;print(json.load(open('$f'))['metrics'])")"
     done
 }
 
