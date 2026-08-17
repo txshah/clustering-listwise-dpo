@@ -21,6 +21,18 @@ def save_jsonl(data: list[dict], path: str) -> None:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
+# ── Prompt format ─────────────────────────────────────────────────────────────
+# One definition shared by trace generation, pair building and evaluation, so the
+# model is always conditioned on the same scaffold it was trained on.
+
+def format_prompt(question: str, tokenizer=None) -> str:
+    """Chat template when the model has one, plain Question/Answer otherwise."""
+    if tokenizer is not None and getattr(tokenizer, "chat_template", None) is not None:
+        messages = [{"role": "user", "content": question}]
+        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    return f"Question: {question}\nAnswer:"
+
+
 # ── Correctness oracle ────────────────────────────────────────────────────────
 
 def is_correct(trace: str, ground_truth: str) -> bool:

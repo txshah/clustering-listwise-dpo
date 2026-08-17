@@ -46,7 +46,7 @@ Usage:
 import argparse
 import os
 from tqdm import tqdm
-from utils import load_jsonl, save_jsonl
+from utils import load_jsonl, save_jsonl, format_prompt
 
 
 # ── Ranking helpers ────────────────────────────────────────────────────────────
@@ -110,7 +110,8 @@ def build_listwise(
             ranked_wrongs = rank_by_length(wrongs)[:4]
 
         pairs.append({
-            "prompt":    item["question"],
+            # Same scaffold as generation and eval (utils.format_prompt)
+            "prompt":    format_prompt(item["question"]),
             "chosen":    chosen,
             "rejected1": ranked_wrongs[0],
             "rejected2": ranked_wrongs[1],

@@ -16,8 +16,8 @@ MODEL="mistralai/Mistral-7B-v0.1"
 
 step_prepare() {
     echo "=== Step 1: prepare questions ==="
-    python generation/code/prepare_questions.py --output generation/traces/questions.jsonl
-    python -c "
+    uv run generation/code/prepare_questions.py --output generation/traces/questions.jsonl
+    uv run python -c "
 import json
 data = [json.loads(l) for l in open('generation/traces/questions.jsonl')]
 with open('generation/traces/questions_small.jsonl','w') as f:
@@ -28,7 +28,7 @@ print('Sliced 10 questions -> generation/traces/questions_small.jsonl')
 
 step_generate() {
     echo "=== Step 2: generate traces (10 questions x 10 samples) ==="
-    python generation/code/generate_traces.py \
+    uv run generation/code/generate_traces.py \
         --input generation/traces/questions_small.jsonl \
         --output generation/traces/raw/raw_traces_small.jsonl \
         --model "$MODEL" \
@@ -38,7 +38,7 @@ step_generate() {
 
 step_process() {
     echo "=== Step 3: sort correct / wrong (dedup disabled for smoke test) ==="
-    python generation/code/process_traces.py \
+    uv run generation/code/process_traces.py \
         --input generation/traces/raw/raw_traces_small.jsonl \
         --output generation/traces/processed/results_small.jsonl \
         --length_window 0
@@ -46,37 +46,45 @@ step_process() {
 
 step_dpo() {
     echo "=== Step 4.1: build DPO pairs ==="
-    python generation/code/build_pairs.py \
+    uv run generation/code/build_pairs.py \
         --input generation/traces/processed/results_small.jsonl \
         --output generation/traces/dpo_pairs_small.jsonl
     echo "=== Step 4.1: train DPO ==="
-    python training/train_dpo.py \
+    uv run training/train_dpo.py \
         --config training/configs/dpo_config.yaml \
         --dataset_path generation/traces/dpo_pairs_small.jsonl \
-        --output_dir outputs/dpo_small
+        --output_dir outputs/dpo_small \
+        --wandb_group smoke-test
 }
 
 step_listwise() {
     echo "=== Step 4.2: build listwise pairs ==="
-    python generation/code/build_listwise.py \
+    uv run generation/code/build_listwise.py \
         --input generation/traces/processed/results_small.jsonl \
         --output generation/traces/listwise_pairs_small.jsonl \
         --n_per_class 4
     echo "=== Step 4.2: train listwise ==="
-    python training/train_listwise.py \
+    uv run training/train_listwise.py \
         --config training/configs/listwise_config.yaml \
         --dataset_path generation/traces/listwise_pairs_small.jsonl \
-        --output_dir outputs/listwise_small
+        --output_dir outputs/listwise_small \
+        --wandb_group smoke-test
 }
 
 step_eval() {
-    echo "=== Step 5: evaluate ==="
-    python evaluation/eval_gsm8k.py --model outputs/dpo_small      --output results_dpo_small.json
-    python evaluation/eval_gsm8k.py --model outputs/listwise_small --output results_listwise_small.json
+    echo "=== Step 5: evaluate (20 questions, 8-shot, maj@8 + pass@10/5/1) ==="
+    for tag in dpo listwise; do
+        uv run evaluation/eval_gsm8k.py \
+            --model "outputs/${tag}_small" \
+            --n_shot 8 --n_samples 10 --maj_k 8 --pass_k 1,5,10 \
+            --limit 20 --batch_size 4 --max_new_tokens 400 \
+            --output "results/${tag}_small.json" \
+            --wandb_group smoke-test --wandb_run_name "smoke-${tag}"
+    done
     echo "--- DPO results ---"
-    cat results_dpo_small.json
+    head -40 results/dpo_small.json
     echo "--- Listwise results ---"
-    cat results_listwise_small.json
+    head -40 results/listwise_small.json
 }
 
 case "${1:-all}" in

@@ -12,3 +12,9 @@ gradient_accumulation_steps: 16
 num_train_epochs:            2
 max_length:                  1024
 eval_split:                  0.05
+logging_steps:               1
+seed:                        42
+
+# W&B (override on the CLI with --wandb_project / --wandb_group / --no_wandb)
+wandb_project: clustering-listwise-dpo
+wandb_group:   listwise

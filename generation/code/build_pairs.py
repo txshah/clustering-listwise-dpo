@@ -28,7 +28,7 @@ import os
 import random
 from tqdm import tqdm
 
-from utils import load_jsonl, save_jsonl
+from utils import load_jsonl, save_jsonl, format_prompt
 
 
 def build_pairs(
@@ -38,7 +38,8 @@ def build_pairs(
     pairs = []
 
     for item in tqdm(processed, desc="building pairs"):
-        question = item["question"]
+        # Same scaffold as generation and eval (utils.format_prompt)
+        question = format_prompt(item["question"])
         corrects = item["correct_solutions"]
         wrongs   = item["wrong_solutions"]
 

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+
+# W&B local run cache (runs live on the server)
+wandb/
+
+# Eval outputs
+results/
+*_detail.jsonl

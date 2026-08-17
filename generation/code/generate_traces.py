@@ -1,95 +1,135 @@
 """
 Step 1 — Raw trace generation (mirrors lce_solution_gen_gsm8k.py).
 
-For each question in the input JSONL, call the model N times at temperature=1
-(do_sample=True) and save every raw response to traces/raw/.
+For each question in the input JSONL, sample the model N times at temperature=1
+(the paper's D_naive setting) and save every raw response.
+
+Backends (same pattern as evaluation/eval_gsm8k.py):
+  vllm  — continuous batching, ~15× faster; the default when importable
+  hf    — transformers.generate, one question at a time; always available
+
+Traces are appended to the output file as each chunk finishes, so a multi-hour
+run can be interrupted and rerun with --resume to pick up where it stopped.
 
 Input JSONL schema  : {"idx": int, "question": str, "answer": str, ...}
-Output JSONL schema : same fields + "trace": str  (one file per question batch)
+Output JSONL schema : same fields + "trace": str  (n_samples rows per question)
 
 Usage:
-    python generate_traces.py \
-        --input  ../traces/questions.jsonl \
-        --output ../traces/raw/raw_traces.jsonl \
+    uv run generation/code/generate_traces.py \
+        --input  generation/traces/questions.jsonl \
+        --output generation/traces/raw/raw_traces.jsonl \
         --model  mistralai/Mistral-7B-v0.1 \
-        --n_samples 8 \
-        --max_new_tokens 512
+        --n_samples 30 --max_new_tokens 512 --resume
 """
 
 import argparse
+import json
 import os
-from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import time
+
+# vLLM starts its engine in a subprocess; must be set before vllm is imported.
+os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+
 import torch
+from tqdm import tqdm
+from transformers import AutoTokenizer
 
-# torch.isin on Long tensors is broken on MPS before macOS 14.
-# Cast to float, run isin, cast result back to bool.
-if torch.backends.mps.is_available():
-    _orig_isin = torch.isin
-    def _mps_isin(elements, test_elements, **kwargs):
-        if elements.is_floating_point() or test_elements.is_floating_point():
-            return _orig_isin(elements, test_elements, **kwargs)
-        return _orig_isin(elements.float(), test_elements.float(), **kwargs).bool()
-    torch.isin = _mps_isin
-
-from utils import load_jsonl, save_jsonl
+from utils import load_jsonl, format_prompt
 
 
-def build_prompt(question: str, tokenizer) -> str:
-    """
-    Format the question into a prompt.
-    Uses chat template if available (instruct models); falls back to a plain
-    Question/Answer format for base models like Mistral-7B-v0.1.
-    """
-    if tokenizer.chat_template is not None:
-        messages = [{"role": "user", "content": question}]
-        return tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+# ── Backends ──────────────────────────────────────────────────────────────────
+
+class HFBackend:
+    """transformers.generate, one question per call (n_samples sequences each)."""
+
+    name = "hf"
+
+    def __init__(self, args):
+        from transformers import AutoModelForCausalLM
+
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
+        # MPS doesn't support bfloat16 before macOS 14 — use float16 instead
+        dtype = torch.bfloat16 if self.device == "cuda" else torch.float16
+
+        self.tokenizer = AutoTokenizer.from_pretrained(args.model)
+        self.model = AutoModelForCausalLM.from_pretrained(args.model, dtype=dtype)
+        self.model.to(self.device).eval()
+        self.args = args
+        self.chunk_size = 1                      # one question per generate call
+
+    def generate(self, prompts: list[str]) -> list[list[str]]:
+        args = self.args
+        out = []
+        for prompt in prompts:
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            prompt_len = inputs["input_ids"].shape[1]
+            with torch.no_grad():
+                output_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=args.max_new_tokens,
+                    do_sample=True,              # ← temperature sampling (D_naive)
+                    temperature=args.temperature,
+                    num_return_sequences=args.n_samples,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                )
+            out.append([
+                self.tokenizer.decode(seq[prompt_len:], skip_special_tokens=True)
+                for seq in output_ids
+            ])
+        return out
+
+
+class VLLMBackend:
+    """vLLM with continuous batching — the whole chunk is scheduled at once."""
+
+    name = "vllm"
+
+    def __init__(self, args):
+        from vllm import LLM, SamplingParams
+
+        self.llm = LLM(
+            model = args.model,
+            dtype = "bfloat16",
+            gpu_memory_utilization = args.gpu_memory_utilization,
+            max_model_len = args.max_model_len,
+            seed = args.seed,
         )
-    # Base model fallback — matches the paper's simple prompt style
-    return f"Question: {question}\nAnswer:"
+        self.tokenizer = AutoTokenizer.from_pretrained(args.model)
+        self.sampling = SamplingParams(
+            n = args.n_samples,
+            temperature = args.temperature,      # paper: temp=1 for the candidate pool
+            top_p = 1.0,                         # pure temperature sampling, like HF defaults
+            max_tokens = args.max_new_tokens,
+            seed = args.seed,
+        )
+        # Chunks only set how often traces hit disk (checkpoint/resume granularity).
+        self.chunk_size = args.vllm_chunk
+
+    def generate(self, prompts: list[str]) -> list[list[str]]:
+        outputs = self.llm.generate(prompts, self.sampling, use_tqdm=False)
+        return [[o.text for o in out.outputs] for out in outputs]
 
 
-def generate_traces(
-    questions: list[dict],
-    model,
-    tokenizer,
-    n_samples: int,
-    max_new_tokens: int,
-    device: str,
-) -> list[dict]:
-    """
-    For each question dict, produce n_samples traces at temperature=1.
-    Returns flat list of {idx, question, answer, trace} dicts.
-    """
-    results = []
+def build_backend(args):
+    requested = args.backend
+    if requested == "auto":
+        try:
+            import vllm  # noqa: F401
+            requested = "vllm"
+        except ImportError:
+            requested = "hf"
+            print("[backend] vLLM not importable — falling back to transformers "
+                  "(run `uv sync` for the fast path)")
+    print(f"[backend] {requested}")
+    return VLLMBackend(args) if requested == "vllm" else HFBackend(args)
 
-    for item in tqdm(questions, desc="generating"):
-        prompt = build_prompt(item["question"], tokenizer)
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        prompt_len = inputs["input_ids"].shape[1]
 
-        with torch.no_grad():
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,       # ← temperature sampling (D_naive)
-                temperature=1.0,      # ← paper uses temp=1 for negative candidates
-                num_return_sequences=n_samples,
-                pad_token_id=tokenizer.eos_token_id,
-            )
-
-        for seq in output_ids:
-            trace = tokenizer.decode(seq[prompt_len:], skip_special_tokens=True)
-            results.append({
-                "idx": item["idx"],
-                "question": item["question"],
-                "answer": item.get("answer", ""),
-                "trace": trace,
-            })
-
-    return results
-
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
@@ -98,33 +138,69 @@ def main():
     parser.add_argument("--model",          required=True,  help="HF model name or local path")
     parser.add_argument("--n_samples",      type=int, default=8,   help="Traces per question")
     parser.add_argument("--max_new_tokens", type=int, default=512)
+    parser.add_argument("--temperature",    type=float, default=1.0)
+    parser.add_argument("--seed",           type=int, default=42)
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip questions whose traces are already in the output file")
+
+    parser.add_argument("--backend", default="auto", choices=["auto", "vllm", "hf"])
+    parser.add_argument("--vllm_chunk", type=int, default=128,
+                        help="vLLM: questions per generate() call (checkpoint granularity)")
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.90)
+    parser.add_argument("--max_model_len", type=int, default=1024,
+                        help="vLLM: prompt + completion budget (zero-shot prompts are short)")
     args = parser.parse_args()
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
-    if torch.cuda.is_available():
-        device = "cuda"
-    elif torch.backends.mps.is_available():
-        device = "mps"
-    else:
-        device = "cpu"
-    print(f"Loading model {args.model} on {device}...")
-
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    # MPS (Apple Silicon) doesn't support bfloat16 before macOS 14 — use float16 instead
-    dtype = torch.bfloat16 if device == "cuda" else torch.float16
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model, dtype=dtype
-    ).to(device)
-    model.eval()
-
     questions = load_jsonl(args.input)
-    print(f"Loaded {len(questions)} questions. Generating {args.n_samples} traces each...")
 
-    raw_traces = generate_traces(questions, model, tokenizer, args.n_samples, args.max_new_tokens, device)
+    done_idx: set = set()
+    if args.resume and os.path.isfile(args.output):
+        with open(args.output) as f:
+            done_idx = {json.loads(line)["idx"] for line in f if line.strip()}
+        print(f"Resuming: {len(done_idx)} questions already have traces")
+    pending = [q for q in questions if q["idx"] not in done_idx]
 
-    save_jsonl(raw_traces, args.output)
-    print(f"Saved {len(raw_traces)} raw traces → {args.output}")
+    # Keep the vLLM sequence budget ahead of the longest question + completion.
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    max_prompt = max(
+        (len(tokenizer(format_prompt(q["question"], tokenizer))["input_ids"]) for q in pending),
+        default=0,
+    )
+    needed = max_prompt + args.max_new_tokens
+    if args.max_model_len < needed:
+        print(f"[backend] raising --max_model_len {args.max_model_len} → {needed} "
+              f"(longest prompt is {max_prompt} tokens)")
+        args.max_model_len = needed
+
+    print(f"Loading model {args.model} ...")
+    backend = build_backend(args)
+
+    print(f"{len(pending)}/{len(questions)} questions to go, "
+          f"{args.n_samples} traces each at T={args.temperature}")
+
+    total = 0
+    started = time.time()
+    with open(args.output, "a" if done_idx else "w") as out_file:
+        chunk = backend.chunk_size
+        for start in tqdm(range(0, len(pending), chunk), desc="generating"):
+            batch = pending[start : start + chunk]
+            prompts = [format_prompt(q["question"], backend.tokenizer) for q in batch]
+            for item, traces in zip(batch, backend.generate(prompts)):
+                for trace in traces:
+                    out_file.write(json.dumps({
+                        "idx": item["idx"],
+                        "question": item["question"],
+                        "answer": item.get("answer", ""),
+                        "trace": trace,
+                    }, ensure_ascii=False) + "\n")
+                    total += 1
+            out_file.flush()
+
+    elapsed = time.time() - started
+    print(f"Saved {total} raw traces → {args.output}  "
+          f"({elapsed / 60:.1f} min this run)")
 
 
 if __name__ == "__main__":

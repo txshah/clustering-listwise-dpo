@@ -28,7 +28,7 @@ The paper uses 4+4 with 6 parallel GPU workers and a threshold gate. We removed 
 
 ### 2. Step 4.1 — D_naive DPO (mirrors Step-Controlled-DPO training)
 
-From the trace pool, pair every correct trace with every incorrect trace (capped at `max_pairs` per question). Flattened to plain strings (`prompt`, `chosen`, `rejected`) that TRL 0.9.6's `DPOTrainer.tokenize_row` expects.
+From the trace pool, pair every correct trace with every incorrect trace (capped at `max_pairs` per question). Flattened to plain strings (`prompt`, `chosen`, `rejected`) — TRL's "standard" dataset format.
 
 Train with **TRL's DPOTrainer** + LoRA so the base model is loaded once and shared as the frozen reference — avoids the ~28GB OOM of loading two full 7B copies.
 
@@ -44,7 +44,19 @@ Train with a custom **ListwiseTrainer** that implements the LIPO-λ loss from [L
 
 ### 4. Evaluation
 
-Both models evaluated on GSM8K test split with greedy decoding (temp=0). Metric: **end accuracy** — does the model's final number match the ground truth?
+Both models are evaluated on the GSM8K test split under the **Mistral 7B paper protocol: 8-shot prompting, maj@8** (self-consistency majority vote over 8 samples), alongside **pass@k** for k = 10, 5, 1.
+
+A single generation pass produces every metric — sample `n = 10` completions per question at T=0.8, then:
+
+| Metric | How it's computed |
+|---|---|
+| `avg@1` | mean accuracy of an individual sample (= `pass@1`) |
+| `maj@8` | majority vote over the first 8 samples — the paper's headline number |
+| `pass@k` | unbiased estimator `1 − C(n−c, k)/C(n, k)` (Codex eq. 1) for k = 1, 5, 10 |
+
+So maj@8 + pass@10 + pass@5 cost exactly one run. `--greedy` gives a cheap deterministic pass@1 sanity check instead.
+
+Answer extraction order: `The answer is X` → `#### X` → last number in the completion. Generation stops at `\nQuestion:` so few-shot completions don't run on into the next fabricated question.
 
 ---
 
@@ -56,7 +68,7 @@ Both models evaluated on GSM8K test split with greedy decoding (temp=0). Metric:
 |---|---|---|
 | Jupyter kernel for code execution (LCE) | Removed | Not needed for plain-text traces |
 | 6 GPU workers, IP-based sharding | Single machine | Lightweight setup |
-| `InferenceClient` (vLLM server) | HF `AutoModelForCausalLM` | No separate server needed |
+| `InferenceClient` (vLLM server) | vLLM offline `LLM` engine (HF fallback) | Same speed, no separate server process |
 | Threshold gate (4+4 minimum per question) | Removed | Every question saved as-is |
 | `utils.py` in sibling folder | Consolidated into `generation/code/utils.py` | Single import path |
 | `get_initial_data.py` (GPU split utility) | Replaced by `prepare_questions.py` | Just load GSM8K directly |
@@ -83,7 +95,7 @@ clustering-listwise-dpo/
 ├── generation/
 │   ├── code/
 │   │   ├── prepare_questions.py   # Download GSM8K → questions.jsonl
-│   │   ├── generate_traces.py     # LLM sampling at temp=1 → raw_traces.jsonl
+│   │   ├── generate_traces.py     # Sampling at temp=1 (vLLM/HF backends) → raw_traces.jsonl
 │   │   ├── process_traces.py      # Correctness check + dedup → results.jsonl (no threshold)
 │   │   ├── build_pairs.py         # Step 4.1: (prompt, chosen, rejected) string pairs
 │   │   ├── build_listwise.py      # Step 4.2: (chosen, rejected1-4) ranked pairs
@@ -98,28 +110,66 @@ clustering-listwise-dpo/
 │   ├── train_dpo.py               # TRL DPOTrainer + LoRA
 │   └── train_listwise.py          # ListwiseTrainer + LoRA
 │
-└── evaluation/
-    └── eval_gsm8k.py              # Greedy decoding + end accuracy on GSM8K test
+├── evaluation/
+│   └── eval_gsm8k.py              # 8-shot maj@8 + pass@k on GSM8K test
+│
+├── wandb_utils.py                 # Shared W&B init (used by both trainers + eval)
+├── run_paper_eval.sh              # Paper eval for base / dpo / listwise
+└── smoke_test.sh                  # Full pipeline on 10 questions
 ```
 
 ---
 
-## Dependencies
+## Environment (uv)
 
-```
-torch==2.4.1
-transformers==4.45.1
-trl==0.9.6
-peft==0.13.2
-accelerate==1.13.0
-datasets==4.8.4
-pyyaml
-```
+One environment for everything — training, generation, and vLLM eval. Dependencies are declared in `pyproject.toml` and locked in `uv.lock`; [uv](https://docs.astral.sh/uv/) manages it all:
 
-Install:
 ```bash
-pip install "torch==2.4.1" "transformers==4.45.1" "trl==0.9.6" "peft==0.13.2" "accelerate==1.13.0" "datasets==4.8.4" pyyaml
+curl -LsSf https://astral.sh/uv/install.sh | sh   # once per machine
+uv sync                                            # creates .venv (Python 3.12) from uv.lock
+uv run training/train_dpo.py ...                   # every command runs through uv
 ```
+
+Locked stack: **Python 3.12 · torch 2.13 · transformers 5.15 · trl 1.10 · peft 0.20 · vllm 0.27.1**. To change a dependency, edit `pyproject.toml` and run `uv lock && uv sync` — don't `pip install` into the venv by hand.
+
+`eval_gsm8k.py --backend auto` (the default) uses vLLM when importable and falls back to plain transformers otherwise. LoRA adapters need no merging on either backend — vLLM serves them through `LoRARequest`, HF merges them in memory.
+
+> The repo previously ran on a pinned torch 2.4.1 / trl 0.9.6 stack; both trainers were ported to TRL 1.x (`processing_class=`, `max_length`-only truncation) and revalidated. The old `/pvcvolume/venv` is kept as a rollback but is no longer used.
+
+### Pod environment (verified)
+
+| | |
+|---|---|
+| GPU | 1 × RTX A6000, 48GB |
+| HF cache | `HF_HOME=/pvcvolume/hf_cache` (Mistral-7B-v0.1 already pulled, ~14GB) |
+| W&B | logged in via `~/.netrc` → runs go online automatically |
+| uv cache | `UV_CACHE_DIR=/pvcvolume/uv_cache` |
+
+---
+
+## Experiment Tracking (W&B)
+
+All three scripts (`train_dpo.py`, `train_listwise.py`, `eval_gsm8k.py`) share `wandb_utils.py`.
+
+Auth resolves in this order — no code change needed per machine:
+1. `WANDB_API_KEY` env var
+2. `~/.netrc` entry for `api.wandb.ai` (what `wandb login` writes)
+3. neither → **offline** mode, so a job never blocks on a login prompt (sync later with `wandb sync wandb/offline-run-*`)
+
+Flags available on every script:
+
+```
+--wandb_project NAME     # default: clustering-listwise-dpo (or WANDB_PROJECT)
+--wandb_run_name NAME    # default: auto (e.g. eval-dpo_mistral7b-8shot-n10)
+--wandb_group NAME       # e.g. gsm8k-paper-eval — groups the 3 model runs together
+--wandb_tags a,b
+--wandb_mode online|offline|disabled
+--no_wandb               # shorthand for --wandb_mode disabled
+```
+
+Training runs log loss/lr/eval-loss through HF's `WandbCallback` (attached to the run we open first, so the full YAML config lands in `wandb.config`). Eval runs log `running/*` metrics as questions complete and `final/*` + run summary at the end.
+
+Project defaults also live in the training YAMLs (`wandb_project`, `wandb_group`); CLI flags win.
 
 ---
 
@@ -129,10 +179,10 @@ pip install "torch==2.4.1" "transformers==4.45.1" "trl==0.9.6" "peft==0.13.2" "a
 
 ```bash
 # 1. Prepare questions
-python generation/code/prepare_questions.py --output generation/traces/questions.jsonl
+uv run generation/code/prepare_questions.py --output generation/traces/questions.jsonl
 
 # Slice 10
-python -c "
+uv run python -c "
 import json
 data = [json.loads(l) for l in open('generation/traces/questions.jsonl')]
 with open('generation/traces/questions_small.jsonl','w') as f:
@@ -140,35 +190,38 @@ with open('generation/traces/questions_small.jsonl','w') as f:
 "
 
 # 2. Generate (10 questions × 10 samples)
-python generation/code/generate_traces.py \
+uv run generation/code/generate_traces.py \
     --input generation/traces/questions_small.jsonl \
     --output generation/traces/raw/raw_traces_small.jsonl \
     --model mistralai/Mistral-7B-v0.1 \
     --n_samples 10 --max_new_tokens 256
 
 # 3. Sort correct / wrong (no threshold — saves all questions)
-python generation/code/process_traces.py \
+uv run generation/code/process_traces.py \
     --input  generation/traces/raw/raw_traces_small.jsonl \
     --output generation/traces/processed/results_small.jsonl
 
 # 4.1 DPO
-python generation/code/build_pairs.py \
+uv run generation/code/build_pairs.py \
     --input generation/traces/processed/results_small.jsonl \
     --output generation/traces/dpo_pairs_small.jsonl
-python training/train_dpo.py --config training/configs/dpo_config.yaml \
+uv run training/train_dpo.py --config training/configs/dpo_config.yaml \
     --dataset_path generation/traces/dpo_pairs_small.jsonl --output_dir outputs/dpo_small
 
 # 4.2 Listwise (skips questions with <4 wrong traces)
-python generation/code/build_listwise.py \
+uv run generation/code/build_listwise.py \
     --input generation/traces/processed/results_small.jsonl \
     --output generation/traces/listwise_pairs_small.jsonl --n_per_class 4
-python training/train_listwise.py --config training/configs/listwise_config.yaml \
+uv run training/train_listwise.py --config training/configs/listwise_config.yaml \
     --dataset_path generation/traces/listwise_pairs_small.jsonl --output_dir outputs/listwise_small
 
-# 5. Eval
-python evaluation/eval_gsm8k.py --model outputs/dpo_small --output results_dpo_small.json
-python evaluation/eval_gsm8k.py --model outputs/listwise_small --output results_listwise_small.json
+# 5. Eval (20 questions, 8-shot, maj@8 + pass@10/5/1)
+uv run evaluation/eval_gsm8k.py --model outputs/dpo_small \
+    --n_shot 8 --n_samples 10 --maj_k 8 --pass_k 1,5,10 --limit 20 \
+    --output results/dpo_small.json --wandb_group smoke-test
 ```
+
+Or just `bash smoke_test.sh` (any single step: `prepare | generate | process | dpo | listwise | eval`).
 
 ---
 
@@ -176,36 +229,89 @@ python evaluation/eval_gsm8k.py --model outputs/listwise_small --output results_
 
 ```bash
 # 1. Prepare
-python generation/code/prepare_questions.py --output generation/traces/questions.jsonl
+uv run generation/code/prepare_questions.py --output generation/traces/questions.jsonl
 
-# 2. Generate (7473 questions × 30 samples — use A100/H100)
-python generation/code/generate_traces.py \
+# 2. Generate (7473 questions × 30 samples, vLLM continuous batching;
+#    --resume lets an interrupted run pick up where it stopped)
+uv run generation/code/generate_traces.py \
     --input generation/traces/questions.jsonl \
     --output generation/traces/raw/raw_traces.jsonl \
     --model mistralai/Mistral-7B-v0.1 \
-    --n_samples 30 --max_new_tokens 512
+    --n_samples 30 --max_new_tokens 512 --resume
 
 # 3. Sort
-python generation/code/process_traces.py \
+uv run generation/code/process_traces.py \
     --input  generation/traces/raw/raw_traces.jsonl \
     --output generation/traces/processed/results.jsonl
 
 # 4.1 DPO
-python generation/code/build_pairs.py \
+uv run generation/code/build_pairs.py \
     --input generation/traces/processed/results.jsonl \
     --output generation/traces/dpo_pairs.jsonl --max_pairs 5
-python training/train_dpo.py --config training/configs/dpo_config.yaml
+uv run training/train_dpo.py --config training/configs/dpo_config.yaml
 
 # 4.2 Listwise
-python generation/code/build_listwise.py \
+uv run generation/code/build_listwise.py \
     --input generation/traces/processed/results.jsonl \
     --output generation/traces/listwise_pairs.jsonl --n_per_class 5
-python training/train_listwise.py --config training/configs/listwise_config.yaml
+uv run training/train_listwise.py --config training/configs/listwise_config.yaml
 
-# 5. Eval
-python evaluation/eval_gsm8k.py --model outputs/dpo_mistral7b --output results_dpo.json
-python evaluation/eval_gsm8k.py --model outputs/listwise_mistral7b --output results_listwise.json
+# 5. Paper eval — base + DPO + listwise, 8-shot maj@8 + pass@10/5/1
+bash run_paper_eval.sh
 ```
+
+---
+
+### Paper evaluation (maj@8 + pass@k)
+
+`run_paper_eval.sh` runs the three models (base, DPO, listwise) through the identical protocol and puts them in one W&B group so they overlay:
+
+```bash
+bash run_paper_eval.sh              # all three, full 1319-question test split
+bash run_paper_eval.sh dpo          # one model
+LIMIT=200 bash run_paper_eval.sh    # subset first — use it to time the full run
+N_SAMPLES=8 bash run_paper_eval.sh  # maj@8 only (drops pass@10, ~20% cheaper)
+```
+
+Env knobs: `BASE_MODEL DPO_MODEL LISTWISE_MODEL N_SHOT N_SAMPLES MAJ_K PASS_K TEMPERATURE BACKEND BATCH_SIZE MAX_NEW_TOKENS LIMIT RESULTS_DIR WANDB_GROUP`.
+
+Backend flags on `eval_gsm8k.py`:
+
+```
+--backend auto|vllm|hf         # auto: vLLM if importable, else transformers
+--vllm_chunk 128               # questions per generate() call — only the checkpoint/resume granularity
+--gpu_memory_utilization 0.90  # vLLM VRAM budget (weights + KV cache)
+--max_model_len 2048           # auto-raised if the few-shot prefix needs more
+--batch_size 4                 # HF backend only
+```
+
+**Cost (measured on this pod's A6000).** 1319 questions × 10 samples = 13,190 completions per model, with a 1150-token 8-shot prefix.
+
+| Backend | Measured throughput | Full test split, per model |
+|---|---|---|
+| vLLM (default) | **0.87 s/question** (64 q in 56 s, continuous batching) | **~20 min** + ~2 min engine startup |
+| HF transformers | 13 s/question at `BATCH_SIZE=4` (~28GB) | ~5 h |
+
+Trace generation uses the same backends: 10 questions × 10 samples × 256 tokens ran in ~6 s on vLLM (vs minutes on HF), which extrapolates to roughly **7 h for the full 7473 × 30 × 512-token generation run** — checkpointed, so it survives interruptions via `--resume`.
+
+So all three models (base + DPO + listwise) finish in about an hour on vLLM. Practical notes:
+
+- Every run writes per-question records incrementally and `run_paper_eval.sh` passes `--resume`, so an interrupted job restarts where it stopped (delete `results/*_detail.jsonl` to force a clean rerun).
+- vLLM's engine schedules everything itself — `--vllm_chunk` (default 128) only sets how often records hit disk. `BATCH_SIZE` matters only on the HF fallback; there, 4 beat 8 (a batch waits on its slowest sequence).
+- First vLLM start on a model compiles CUDA graphs (~1 min extra); later starts reuse the cache.
+
+Direct invocation for one model:
+
+```bash
+uv run evaluation/eval_gsm8k.py \
+    --model outputs/dpo_mistral7b \
+    --n_shot 8 --n_samples 10 --maj_k 8 --pass_k 1,5,10 \
+    --temperature 0.8 --batch_size 4 --max_new_tokens 400 \
+    --output results/dpo_paper_eval.json \
+    --wandb_group gsm8k-paper-eval --resume
+```
+
+`--model` accepts an HF id, a full checkpoint, or a **LoRA adapter directory** — adapters are detected via `adapter_config.json`, loaded onto their recorded base model and merged for full-speed inference (`--base_model` overrides the base).
 
 ---
 
@@ -233,4 +339,6 @@ total = λ1×losses1 + λ2×losses2 + λ3×losses3 + λ4×losses4
 
 - **Ranking proxy is weak**: incorrect traces ranked by length, not a reward model. Replace `rank_by_length` in `build_listwise.py` to improve.
 - **No preference within correct traces**: only the shortest correct trace is used as `chosen`.
-- **Single-machine generation**: parallelise with vLLM for large-scale runs.
+- **Sampling nuance on vLLM**: generation and eval both default to the vLLM backend now. vLLM samples all `n` completions in one continuous-batching pass, so per-question wall-time collapses, but token-level RNG differs from HF's `generate` — trace pools produced by the two backends are statistically equivalent (same temperature), not bit-identical.
+- **Train/eval prompt scaffold**: `utils.format_prompt` is now the single definition used by `generate_traces.py`, `build_pairs.py`, `build_listwise.py` and the eval. Preference data built before this change used the bare question as the prompt while generation used `Question: …\nAnswer:` — rebuild `dpo_pairs*.jsonl` / `listwise_pairs*.jsonl` if they predate it.
+- **Eval prompt is few-shot, training prompt is zero-shot**: the paper protocol prepends 8 exemplars at eval time; the preference pairs are single-turn. Pass `--n_shot 0` to score the models in their training format instead.

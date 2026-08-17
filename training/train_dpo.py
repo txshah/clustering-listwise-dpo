@@ -21,8 +21,11 @@ from peft import LoraConfig, TaskType
 from trl import DPOTrainer, DPOConfig
 
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../generation/code"))
+_REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+sys.path.insert(0, os.path.join(_REPO_ROOT, "generation/code"))
+sys.path.insert(0, _REPO_ROOT)
 from utils import load_jsonl
+from wandb_utils import init_wandb, finish, add_wandb_args, mode_from_args, tags_from_args
 
 
 def load_config(path: str) -> dict:
@@ -32,9 +35,9 @@ def load_config(path: str) -> dict:
 
 def flatten_to_strings(data: list[dict]) -> list[dict]:
     """
-    Convert message-list format → plain strings that TRL 0.9.6 expects.
+    Convert message-list format → TRL's "standard" (plain-string) dataset format.
     build_pairs.py outputs: {chosen: [messages], rejected: [messages]}
-    TRL 0.9.6 expects:      {prompt: str, chosen: str, rejected: str}
+    DPOTrainer expects:     {prompt: str, chosen: str, rejected: str}
     """
     flat = []
     for item in data:
@@ -60,6 +63,7 @@ def main():
     parser.add_argument("--config",       default="configs/dpo_config.yaml")
     parser.add_argument("--dataset_path", default=None, help="Override config dataset_path")
     parser.add_argument("--output_dir",   default=None, help="Override config output_dir")
+    add_wandb_args(parser, default_job_type="train-dpo")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -68,6 +72,20 @@ def main():
     if args.output_dir:
         cfg["output_dir"] = args.output_dir
 
+    # Init W&B before the Trainer so HF's WandbCallback attaches to this run
+    # instead of starting its own (and so the run carries the full config).
+    run_name = args.wandb_run_name or f"dpo-{os.path.basename(cfg['output_dir'].rstrip('/'))}"
+    run = init_wandb(
+        project  = args.wandb_project or cfg.get("wandb_project"),
+        run_name = run_name,
+        config   = cfg | {"method": "dpo"},
+        group    = args.wandb_group or cfg.get("wandb_group"),
+        job_type = args.wandb_job_type,
+        tags     = tags_from_args(args),
+        mode     = mode_from_args(args),
+    )
+    report_to = ["wandb"] if run is not None else "none"
+
     tokenizer = AutoTokenizer.from_pretrained(cfg["model_name_or_path"])
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -75,7 +93,7 @@ def main():
     # float16 for MPS, bfloat16 for CUDA
     dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float16
     model = AutoModelForCausalLM.from_pretrained(
-        cfg["model_name_or_path"], torch_dtype=dtype
+        cfg["model_name_or_path"], dtype=dtype
     )
 
     # LoRA: train only small adapter weights, base model shared as frozen reference.
@@ -97,28 +115,36 @@ def main():
         per_device_train_batch_size = cfg.get("per_device_train_batch_size", 1),
         gradient_accumulation_steps = cfg.get("gradient_accumulation_steps", 8),
         num_train_epochs            = cfg.get("num_train_epochs", 2),
-        max_length                  = cfg.get("max_length", 512),
-        max_prompt_length           = cfg.get("max_prompt_length", 256),
-        logging_steps               = 1,
+        # TRL 1.x dropped max_prompt_length — max_length caps prompt+completion,
+        # truncation_mode picks which end of the prompt survives.
+        max_length                  = cfg.get("max_length", 1024),
+        truncation_mode             = "keep_end",
+        logging_steps               = cfg.get("logging_steps", 1),
         save_strategy               = "epoch",
+        eval_strategy               = "epoch" if len(eval_dataset) else "no",
         bf16                        = torch.cuda.is_available(),
         fp16                        = False,  # MPS + torch<2.5 doesn't support accelerate fp16
         remove_unused_columns       = False,
+        report_to                   = report_to,
+        run_name                    = run_name,
+        seed                        = cfg.get("seed", 42),
     )
 
     trainer = DPOTrainer(
-        model         = model,
-        ref_model     = None,     # None + peft_config = base weights used as reference
-        args          = training_args,
-        train_dataset = train_dataset,
-        eval_dataset  = eval_dataset,
-        tokenizer     = tokenizer,
-        peft_config   = peft_config,
+        model            = model,
+        ref_model        = None,  # None + peft_config = base weights used as reference
+        args             = training_args,
+        train_dataset    = train_dataset,
+        eval_dataset     = eval_dataset,
+        processing_class = tokenizer,
+        peft_config      = peft_config,
     )
 
     trainer.train()
     trainer.save_model(cfg["output_dir"])
+    tokenizer.save_pretrained(cfg["output_dir"])
     print(f"DPO model saved → {cfg['output_dir']}")
+    finish(run)
 
 
 if __name__ == "__main__":

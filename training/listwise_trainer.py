@@ -197,3 +197,13 @@ class ListwiseTrainer(Trainer):
         )
 
         return (loss, None) if return_outputs else loss
+
+    def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys=None):
+        """
+        The default implementation calls model(**inputs), which fails here because
+        the batch holds 5 keyed sequence groups instead of a plain input_ids/labels
+        pair. Evaluation only needs the listwise loss, so compute that directly.
+        """
+        with torch.no_grad():
+            loss = self.compute_loss(model, inputs)
+        return (loss.detach(), None, None)
