@@ -3,12 +3,12 @@
 #
 # Everything durable lives on the PVC (/pvcvolume); the container layer is
 # disposable. This script rewires a fresh container around the PVC:
-# sshd (for ssh access), PATH, HF cache, venv, tmux config, and secrets.
+# sshd (for ssh access), PATH (herdr binary), HF cache, venv, and secrets.
 #
 # First-time setup and the full walkthrough: NAUTILUS.md
 set -e
 
-apt-get update && apt-get install -y openssh-server netcat-openbsd git tmux
+apt-get update && apt-get install -y openssh-server netcat-openbsd git
 
 mkdir -p /run/sshd /root/.ssh /pvcvolume/bin
 if [ -f /pvcvolume/authorized_keys ]; then
@@ -19,9 +19,11 @@ else
 fi
 pgrep -x sshd >/dev/null || /usr/sbin/sshd
 
-# tmux config lives on the PVC (ctrl+a prefix - ctrl+b would be swallowed by a
-# local herdr/tmux when attaching from inside one)
-[ -f /pvcvolume/tmux.conf ] && cp /pvcvolume/tmux.conf /root/.tmux.conf
+# herdr config (e.g. a custom prefix) lives on the PVC, if present
+if [ -f /pvcvolume/herdr-config.toml ]; then
+    mkdir -p /root/.config/herdr
+    cp /pvcvolume/herdr-config.toml /root/.config/herdr/config.toml
+fi
 
 grep -q 'pvcvolume/bin' /root/.bashrc || cat >> /root/.bashrc <<'RC'
 export PATH=/pvcvolume/bin:$PATH

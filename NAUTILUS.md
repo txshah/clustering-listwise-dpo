@@ -1,9 +1,9 @@
 # Nautilus A6000 Setup
 
-How to run this project on a Nautilus (NRP) RTX A6000 pod, with ssh access and a persistent tmux session for long runs.
+How to run this project on a Nautilus (NRP) RTX A6000 pod, with ssh access and a persistent herdr session for long runs.
 Each step is tagged with where it runs: **[laptop]**, **[pod]**, or **[browser]**.
 
-The connection chain: `ssh nautilus-a6000` → ProxyCommand (`kubectl exec` → `nc :22`) → sshd in the pod → tmux session working out of `/pvcvolume`.
+The connection chain: `ssh nautilus-a6000` → ProxyCommand (`kubectl exec` → `nc :22`) → sshd in the pod → herdr session working out of `/pvcvolume`.
 
 The guiding rule: the container layer is disposable, the PVC is durable.
 Everything that must survive an eviction (repo, venv, HF cache, ssh key, secrets) lives on `/pvcvolume`, and `pod-init.sh` rewires a fresh container around it.
@@ -103,33 +103,28 @@ ssh nautilus-a6000 echo ok   # prints: ok
 Every new pod generates fresh host keys, so after an eviction ssh refuses with a MITM warning.
 That is expected here; clear it with `ssh-keygen -R nautilus-a6000` and reconnect.
 
-## 7. tmux session in the pod [pod]
+## 7. herdr in the pod [pod]
 
-`pod-init.sh` already apt-installed tmux.
-One-time: put a tmux config on the PVC.
-It uses `ctrl+a` as the prefix, because `ctrl+b` gets swallowed by a local herdr or tmux when you attach from inside one:
+One-time: install herdr and park the binary on the PVC (`pod-init.sh` already put `/pvcvolume/bin` on PATH):
 
 ```bash
-cat > /pvcvolume/tmux.conf <<'EOF'
-set -g prefix C-a
-unbind C-b
-bind C-a send-prefix
-set -g mouse on
-set -g history-limit 100000
-EOF
-cp /pvcvolume/tmux.conf /root/.tmux.conf   # pod-init.sh does this on future boots
+curl -fsSL https://herdr.dev/install.sh | sh
+cp "$(command -v herdr)" /pvcvolume/bin/
 ```
 
 Daily use, from the laptop:
 
 ```bash
 ssh nautilus-a6000
-tmux new -A -s main    # creates the session, or attaches if it exists
+herdr    # starts or reattaches to the pod's persistent session
 ```
 
-Launch long runs inside it.
-Detach with `ctrl+a d` (or just close the laptop; the session keeps running).
-Splits: `ctrl+a %` vertical, `ctrl+a "` horizontal.
+Launch long runs inside it; point the workspace at `/pvcvolume/clustering-listwise-dpo`.
+Detach with `ctrl+b q` (or just close the laptop; the herdr server keeps running).
+Splits: `prefix+v` vertical, `prefix+minus` horizontal.
+
+If you attach from a pane inside a local herdr, the outer one swallows `ctrl+b`.
+Fix: set a different prefix (e.g. `[keys] prefix = "ctrl+a"`) in the pod's herdr config and save it as `/pvcvolume/herdr-config.toml`; `pod-init.sh` restores it to `~/.config/herdr/config.toml` on every boot.
 
 ## 8. After an eviction [laptop]
 
@@ -140,8 +135,8 @@ kubectl get pods                # confirm the new pod is Running
 kubectl exec -it deploy/assenthi-listwise-deployment -- bash /pvcvolume/clustering-listwise-dpo/pod-init.sh
 ssh-keygen -R nautilus-a6000    # new pod = new host key
 ssh nautilus-a6000
-tmux new -A -s main
+herdr
 ```
 
-tmux sessions and running jobs do not survive the eviction itself; relaunch the runs.
+herdr sessions and running jobs do not survive the eviction itself; relaunch the runs.
 The pipeline scripts resume from what is on the PVC, and wandb shows the crashed run so you know where it died.
