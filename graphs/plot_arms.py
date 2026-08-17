@@ -11,8 +11,10 @@ Usage (from repo root, after run_arms.sh eval):
 """
 
 import argparse
+import glob
 import json
 import math
+import statistics
 import os
 
 import matplotlib.pyplot as plt
@@ -49,10 +51,19 @@ def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return center - half, center + half
 
 
-def result_path(results_dir: str, key: str, tag: str) -> str:
-    # run_arms.sh writes $RESULTS_DIR/{base,arm_<key>}_{tag}.json
-    name = f"base_{tag}.json" if key == "base" else f"arm_{key}_{tag}.json"
-    return os.path.join(results_dir, name)
+def result_paths(results_dir: str, key: str, tag: str) -> list[str]:
+    """
+    run_arms.sh writes $RESULTS_DIR/base_{tag}.json for the base model and
+    $RESULTS_DIR/arm_{key}_s{seed}_{tag}.json per training seed
+    (arm_{key}_{tag}.json accepted for single-seed runs from older revisions).
+    """
+    if key == "base":
+        candidates = [f"base_{tag}.json"]
+    else:
+        candidates = sorted(glob.glob(os.path.join(results_dir, f"arm_{key}_s*_{tag}.json")))
+        candidates = [os.path.basename(c) for c in candidates] or [f"arm_{key}_{tag}.json"]
+    paths = [os.path.join(results_dir, name) for name in candidates]
+    return [p for p in paths if os.path.exists(p)]
 
 
 def main():
@@ -67,17 +78,22 @@ def main():
 
     rows = []
     for key, label, color in ARMS:
-        path = result_path(args.results_dir, key, args.tag)
-        if not os.path.exists(path):
-            print(f"skipping {key}: {path} not found")
+        paths = result_paths(args.results_dir, key, args.tag)
+        if not paths:
+            print(f"skipping {key}: no results found")
             continue
-        with open(path) as f:
-            r = json.load(f)
         # eval_gsm8k.py summary: {"metrics": {"maj@8": ..., "pass@10": ..., "total": N}}
-        metrics = r["metrics"]
-        acc, n = metrics[args.metric], metrics["total"]
+        accs, n = [], 0
+        for path in paths:
+            with open(path) as f:
+                metrics = json.load(f)["metrics"]
+            accs.append(metrics[args.metric])
+            n = metrics["total"]
+        acc = statistics.mean(accs)
         rows.append({"key": key, "label": label, "color": color,
-                     "acc": acc, "k": round(acc * n), "n": n})
+                     "acc": acc, "k": round(acc * n), "n": n,
+                     "std": statistics.stdev(accs) if len(accs) > 1 else None,
+                     "n_seeds": len(accs)})
     if not rows:
         raise SystemExit("no results_*.json files found")
 
@@ -91,7 +107,12 @@ def main():
 
     xs = range(len(rows))
     for i, row in enumerate(rows):
-        lo, hi = wilson_ci(row["k"], row["n"])
+        # Multi-seed arms: whiskers = ±1 std across seeds (training noise).
+        # Single runs: Wilson 95% CI on the eval questions (sampling noise).
+        if row["std"] is not None:
+            lo, hi = row["acc"] - row["std"], row["acc"] + row["std"]
+        else:
+            lo, hi = wilson_ci(row["k"], row["n"])
         ax.bar(i, row["acc"], width=0.62, color=row["color"], zorder=3)
         ax.errorbar(i, row["acc"], yerr=[[row["acc"] - lo], [hi - row["acc"]]],
                     fmt="none", ecolor=INK_2, elinewidth=1.4, capsize=4, zorder=4)
@@ -115,10 +136,13 @@ def main():
         ax.spines[spine].set_color(GRAY_LT)
     ax.tick_params(colors=INK_2)
 
-    fig.suptitle("Listwise preference training on GSM8K - one seed per arm",
+    max_seeds = max(r["n_seeds"] for r in rows)
+    seed_note = (f"{max_seeds} seeds per arm | whiskers: ±1 std over seeds"
+                 if max_seeds > 1 else "one seed per arm | whiskers: Wilson 95% CI")
+    fig.suptitle("Listwise preference training on GSM8K",
                  fontsize=13, fontweight="bold", color=INK, x=0.08, ha="left")
     fig.text(0.08, 0.855, f"Mistral-7B-v0.1 base | eval: {n_eval} test questions, "
-             "8-shot, 10 samples @ T=0.8, scored by math-verify | whiskers: Wilson 95% CI",
+             f"8-shot, 10 samples @ T=0.8, scored by math-verify | {seed_note}",
              fontsize=9, color=INK_2)
 
     eff_batch = (cfg.get("per_device_train_batch_size", 1)

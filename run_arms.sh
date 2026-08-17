@@ -15,10 +15,16 @@
 #   bash run_arms.sh score           # any subset of steps, in order
 #   bash run_arms.sh build train
 #   EVAL_LIMIT=500 bash run_arms.sh eval   # quicker eval pass
+#   bash run_arms.sh summary         # aggregate finished evals (mean±std over seeds)
+#
+# Training runs once per arm per seed (SEEDS, default "42 43 44") and skips
+# output dirs that already contain an adapter, so the whole script is re-runnable.
 #
 # Parameters (env vars):
 #   MODEL=mistralai/Mistral-7B-v0.1 N_QUESTIONS=1000 THRESHOLD=0.5
-#   EVAL_BATCH=8 EVAL_LIMIT=<empty = full test split>
+#   SEEDS="42 43 44"  EVAL_LIMIT=<empty = full test split>
+#   N_SHOT=8 EVAL_SAMPLES=10 MAJ_K=8 PASS_K=1,5,10 EVAL_TEMP=0.8
+#   RESULTS_DIR=results WANDB_GROUP=arms-${N_QUESTIONS}
 
 set -e
 cd "$(dirname "$0")"
@@ -26,6 +32,7 @@ cd "$(dirname "$0")"
 MODEL="${MODEL:-mistralai/Mistral-7B-v0.1}"
 N_QUESTIONS="${N_QUESTIONS:-1000}"
 THRESHOLD="${THRESHOLD:-0.5}"
+SEEDS="${SEEDS:-42 43 44}"     # one training run per arm per seed
 EVAL_LIMIT="${EVAL_LIMIT:-}"
 
 # Paper eval protocol (Mistral 7B paper: 8-shot maj@8; one pass gives pass@k too)
@@ -73,11 +80,22 @@ step_build() {
 
 step_train() {
     for arm in $ARMS; do
-        echo "=== Train: $arm ==="
-        uv run training/train_listwise.py \
-            --config training/configs/listwise_config.yaml \
-            --dataset_path "generation/traces/arm_${arm}_${TAG}.jsonl" \
-            --output_dir "outputs/arm_${arm}_${TAG}"
+        for seed in $SEEDS; do
+            out="outputs/arm_${arm}_${TAG}_s${seed}"
+            if [ -f "$out/adapter_model.safetensors" ]; then
+                echo "=== Train: $arm seed=$seed — already done, skipping ==="
+                continue
+            fi
+            echo "=== Train: $arm seed=$seed ==="
+            uv run training/train_listwise.py \
+                --config training/configs/listwise_config.yaml \
+                --dataset_path "generation/traces/arm_${arm}_${TAG}.jsonl" \
+                --output_dir "$out" \
+                --seed "$seed" \
+                --wandb_group "$WANDB_GROUP" \
+                --wandb_run_name "train-${arm}-${TAG}-s${seed}" \
+                --wandb_tags "arm:${arm},seed:${seed},tag:${TAG}"
+        done
     done
 }
 
@@ -98,13 +116,51 @@ run_one_eval() {
 step_eval() {
     run_one_eval base "$MODEL"
     for arm in $ARMS; do
-        run_one_eval "arm_${arm}" "outputs/arm_${arm}_${TAG}"
+        for seed in $SEEDS; do
+            run_one_eval "arm_${arm}_s${seed}" "outputs/arm_${arm}_${TAG}_s${seed}"
+        done
     done
-    echo "=== Summary (maj@${MAJ_K} | pass@k) ==="
-    for name in base $(for a in $ARMS; do echo "arm_${a}"; done); do
-        f="$RESULTS_DIR/${name}_${TAG}.json"
-        [ -f "$f" ] && echo "$name: $(uv run python -c "import json;print(json.load(open('$f'))['metrics'])")"
-    done
+    step_summary
+}
+
+step_summary() {
+    echo "=== Summary: mean ± std across seeds (maj@${MAJ_K} + pass@k) ==="
+    RESULTS_DIR="$RESULTS_DIR" TAG="$TAG" ARMS="$ARMS" SEEDS="$SEEDS" MAJ_K="$MAJ_K" \
+    uv run python - <<'EOF'
+import json, os, statistics
+
+results_dir, tag = os.environ["RESULTS_DIR"], os.environ["TAG"]
+arms, seeds = os.environ["ARMS"].split(), os.environ["SEEDS"].split()
+metrics_keys = [f"maj@{os.environ['MAJ_K']}", "pass@1", "pass@5", "pass@10"]
+
+def show(name, runs):
+    if not runs:
+        print(f"{name:<14} (no results yet)")
+        return
+    parts = []
+    for k in metrics_keys:
+        vals = [r[k] for r in runs if k in r]
+        if not vals:
+            continue
+        mean = statistics.mean(vals)
+        std = statistics.stdev(vals) if len(vals) > 1 else 0.0
+        parts.append(f"{k} {mean:.3f}±{std:.3f}")
+    print(f"{name:<14} n_seeds={len(runs)}  " + "  ".join(parts))
+
+def load(path):
+    try:
+        with open(path) as f:
+            return json.load(f)["metrics"]
+    except FileNotFoundError:
+        return None
+
+base = load(os.path.join(results_dir, f"base_{tag}.json"))
+show("base", [base] if base else [])
+for arm in arms:
+    runs = [m for s in seeds
+            if (m := load(os.path.join(results_dir, f"arm_{arm}_s{s}_{tag}.json")))]
+    show(arm, runs)
+EOF
 }
 
 if [ $# -eq 0 ]; then

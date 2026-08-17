@@ -37,6 +37,8 @@ def main():
     parser.add_argument("--config",       default="configs/listwise_config.yaml")
     parser.add_argument("--dataset_path", default=None, help="Override config dataset_path")
     parser.add_argument("--output_dir",   default=None, help="Override config output_dir")
+    parser.add_argument("--seed",         type=int, default=None,
+                        help="Override config seed (for multi-seed sweeps)")
     add_wandb_args(parser, default_job_type="train-listwise")
     args = parser.parse_args()
 
@@ -45,6 +47,8 @@ def main():
         cfg["dataset_path"] = args.dataset_path
     if args.output_dir:
         cfg["output_dir"] = args.output_dir
+    if args.seed is not None:
+        cfg["seed"] = args.seed
 
     # Init W&B before the Trainer so HF's WandbCallback attaches to this run.
     run_name = args.wandb_run_name or f"listwise-{os.path.basename(cfg['output_dir'].rstrip('/'))}"

@@ -60,7 +60,9 @@ def pool_traces(item: dict) -> list[tuple[str, float]]:
             f"idx={item.get('idx')}: entailment_scores not parallel to solutions."
         )
 
-    return list(zip(corrects, scores["correct"])) + list(zip(wrongs, scores["wrong"]))
+    # third element: does the trace's final answer match the ground truth?
+    return ([(t, s, True)  for t, s in zip(corrects, scores["correct"])] +
+            [(t, s, False) for t, s in zip(wrongs,   scores["wrong"])])
 
 
 def build_entailment_list(
@@ -72,6 +74,8 @@ def build_entailment_list(
     pairs = []
     skipped_no_reference = 0
     skipped_ratio = 0
+    label_flips = {"good_wrong_answer": 0, "chosen_total": 0,
+                   "bad_correct_answer": 0, "bad_total": 0}
 
     for item in tqdm(processed, desc="building entailment lists"):
         if not item["correct_solutions"]:
@@ -90,23 +94,38 @@ def build_entailment_list(
             continue
 
         ranked_bads = bads[:n_bad]
-        for chosen, chosen_score in goods[:n_good]:
+        for chosen, chosen_score, chosen_is_correct in goods[:n_good]:
             record = {
                 # Same scaffold as generation and eval (utils.format_prompt)
                 "prompt": format_prompt(item["question"]),
                 "chosen": chosen,
             }
-            for i, (bad, _) in enumerate(ranked_bads, start=1):
+            for i, (bad, _, _) in enumerate(ranked_bads, start=1):
                 record[f"rejected{i}"] = bad
-            record["chosen_score"]    = chosen_score
-            record["rejected_scores"] = [s for _, s in ranked_bads]
+            record["chosen_score"]      = chosen_score
+            record["chosen_is_correct"] = chosen_is_correct   # metadata: answer matches gold?
+            record["rejected_scores"]   = [s for _, s, _ in ranked_bads]
             pairs.append(record)
+            label_flips["good_wrong_answer"] += int(not chosen_is_correct)
+            label_flips["chosen_total"]      += 1
+        label_flips["bad_correct_answer"] += sum(c for _, _, c in ranked_bads)
+        label_flips["bad_total"]          += len(ranked_bads)
 
     if skipped_no_reference:
         print(f"Skipped {skipped_no_reference} questions (no correct solution → no reference)")
     if skipped_ratio:
         print(f"Skipped {skipped_ratio} questions (fewer than {n_good} good or {n_bad} bad "
               f"traces at threshold {threshold})")
+
+    # The mechanism this arm tests: how often does the entailment label disagree
+    # with answer correctness? All zeros would mean the gate is just correctness
+    # by another name and the ungated arm can't differ from the gated ones.
+    if label_flips["chosen_total"]:
+        gw, ct = label_flips["good_wrong_answer"], label_flips["chosen_total"]
+        bc, bt = label_flips["bad_correct_answer"], label_flips["bad_total"]
+        print(f"Label flips vs correctness @ threshold {threshold}: "
+              f"chosen-with-wrong-answer {gw}/{ct} ({gw/ct:.1%}), "
+              f"rejected-with-correct-answer {bc}/{bt} ({bc/bt:.1%})")
 
     return pairs
 
