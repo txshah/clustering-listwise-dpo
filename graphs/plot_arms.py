@@ -50,15 +50,18 @@ def wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 
 
 def result_path(results_dir: str, key: str, tag: str) -> str:
-    name = f"results_base_{tag}.json" if key == "base" else f"results_arm_{key}_{tag}.json"
+    # run_arms.sh writes $RESULTS_DIR/{base,arm_<key>}_{tag}.json
+    name = f"base_{tag}.json" if key == "base" else f"arm_{key}_{tag}.json"
     return os.path.join(results_dir, name)
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--results_dir", default=REPO,
-                        help="Directory containing results_*.json (default: repo root)")
+    parser.add_argument("--results_dir", default=os.path.join(REPO, "results"),
+                        help="Directory containing the eval summaries (default: repo results/)")
     parser.add_argument("--tag", default="1000", help="Run tag in the filenames")
+    parser.add_argument("--metric", default="maj@8",
+                        help="Which metric to plot (maj@8, pass@1, pass@5, pass@10, avg@1)")
     parser.add_argument("--output", default=os.path.join(REPO, "graphs/arms_accuracy.png"))
     args = parser.parse_args()
 
@@ -70,8 +73,11 @@ def main():
             continue
         with open(path) as f:
             r = json.load(f)
+        # eval_gsm8k.py summary: {"metrics": {"maj@8": ..., "pass@10": ..., "total": N}}
+        metrics = r["metrics"]
+        acc, n = metrics[args.metric], metrics["total"]
         rows.append({"key": key, "label": label, "color": color,
-                     "acc": r["accuracy"], "k": r["correct"], "n": r["total"]})
+                     "acc": acc, "k": round(acc * n), "n": n})
     if not rows:
         raise SystemExit("no results_*.json files found")
 
@@ -99,7 +105,7 @@ def main():
 
     ax.set_xticks(list(xs))
     ax.set_xticklabels([r["label"] for r in rows], fontsize=9.5, color=INK)
-    ax.set_ylabel("GSM8K test accuracy (greedy pass@1)", fontsize=10, color=INK_2)
+    ax.set_ylabel(f"GSM8K test {args.metric} (8-shot, 10 samples)", fontsize=10, color=INK_2)
     ax.set_ylim(0, max(r["acc"] for r in rows) * 1.35 + 0.02)
     ax.yaxis.set_major_formatter(lambda v, _: f"{v*100:.0f}%")
     ax.grid(axis="y", color=GRAY_LT, linewidth=0.7, zorder=0)
