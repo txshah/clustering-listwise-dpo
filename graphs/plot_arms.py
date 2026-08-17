@@ -117,8 +117,8 @@ def main():
 
     fig.suptitle("Listwise preference training on GSM8K - one seed per arm",
                  fontsize=13, fontweight="bold", color=INK, x=0.08, ha="left")
-    fig.text(0.08, 0.855, f"Mistral-7B-v0.1 base | eval: first {n_eval} test questions, "
-             "zero-shot, scored by math-verify | whiskers: Wilson 95% CI",
+    fig.text(0.08, 0.855, f"Mistral-7B-v0.1 base | eval: {n_eval} test questions, "
+             "8-shot, 10 samples @ T=0.8, scored by math-verify | whiskers: Wilson 95% CI",
              fontsize=9, color=INK_2)
 
     eff_batch = (cfg.get("per_device_train_batch_size", 1)
