@@ -130,7 +130,10 @@ clustering-listwise-dpo/
 ├── wandb_utils.py                 # Shared W&B init (used by both trainers + eval)
 ├── run_arms.sh                    # 3-arm experiment: score → build → train → eval
 ├── run_entailment.sh              # Steps 1-3: prepare → generate → process
-└── smoke_test.sh                  # Full pipeline on 10 questions
+├── smoke_test.sh                  # Full pipeline on 10 questions
+├── EXPERIMENTS.md                 # Tiered run plan + W&B monitoring guide
+├── NAUTILUS.md                    # Nautilus (NRP) A6000 setup: pod, PVC env, ssh, herdr
+└── pod-init.sh                    # Pod bootstrap, re-runnable after evictions (see NAUTILUS.md)
 ```
 
 ---
