@@ -13,3 +13,9 @@ wandb/
 # Eval outputs
 results/
 *_detail.jsonl
+
+# Trained adapters (~165MB each) — tracked on W&B, not in git
+outputs/
+
+# Raw generation dumps (~350MB at full scale); processed/arm datasets stay committable
+generation/traces/raw/

@@ -124,7 +124,7 @@ def main():
         max_length                  = cfg.get("max_length", 1024),
         truncation_mode             = "keep_end",
         logging_steps               = cfg.get("logging_steps", 1),
-        save_strategy               = "epoch",
+        save_strategy               = cfg.get("save_strategy", "no"),  # final adapter only — epoch checkpoints cost ~500MB each in optimizer state
         eval_strategy               = "epoch" if len(eval_dataset) else "no",
         bf16                        = torch.cuda.is_available(),
         fp16                        = False,  # MPS + torch<2.5 doesn't support accelerate fp16
