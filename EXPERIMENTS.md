@@ -67,6 +67,13 @@ from 3.37 without oscillation (1e-4 risk) and without flatlining (1e-5 risk).
 If the winner isn't 3e-5, set `learning_rate` in `listwise_config.yaml` before
 Tier 1. Borderline (two lrs within noise)? Prefer the smaller one.
 
+> **Done (2026-08-18): winner 1e-5** (maj@8 0.486 vs 0.480 @3e-6, 0.448 @3e-5,
+> 0.374 @1e-4; 500q) — config updated. The sweep also surfaced a loss bug: mean
+> per-token logps pinned the cascade loss at init (3.37) at every lr; fixed to
+> sum-over-response-tokens (`logp_agg` in the config), the DPO/LPOI convention.
+> An extra 3e-6 point was run because the winner sat at the grid edge; it
+> flatlined (final loss 3.07), so the prefer-smaller rule didn't apply.
+
 ## Tier 1 — Core comparison (~10 h total)
 
 3 arms × **2 seeds** (42/43) + base, full 1319-question test split, at the
@@ -95,16 +102,38 @@ Outputs: adapters in `outputs/arm_<arm>_1000_s<seed>/`, eval summaries in
 (mean ± std). Differences smaller than ~1 std across seeds are noise — don't
 over-read them.
 
+> **Done (2026-08-18)**, full 1319q split, maj@8 mean±std: base 0.487,
+> length 0.497±0.000, gated_lg 0.521±0.004, ungated_lg 0.525±0.001.
+> Entailment *ranking* beats length (+2.4–2.8, ≫ noise); the correctness
+> *gate* does not matter (ungated ≈ gated).
+
 ## Tier 2 — Gate sweeps (~5 h, run after Tier 1)
 
 One seed each, `EVAL_LIMIT=500` to keep it cheap. Promote any winner to 2 seeds
 + full eval before believing it.
 
+> **Warning:** the original recipe here (`THRESHOLD=0.3 bash run_arms.sh build
+> train`) silently no-ops: `build` overwrites the datasets in place while
+> `train` skips output dirs that already hold an adapter. Use explicitly
+> suffixed dataset/output names instead:
+
 ```bash
 # Threshold sensitivity for the ungated arm (Tier 1 used 0.5)
-THRESHOLD=0.3 SEEDS=42 bash run_arms.sh build train
-THRESHOLD=0.7 SEEDS=42 bash run_arms.sh build train
-EVAL_LIMIT=500 SEEDS=42 bash run_arms.sh eval
+SC=generation/traces/processed/results_1000_scored_lg.jsonl
+for t in 0.3 0.7; do
+    uv run generation/code/build_entailment_list.py \
+        --input "$SC" --output "generation/traces/arm_ungated_lg_t${t}_1000.jsonl" \
+        --threshold "$t"
+    uv run training/train_listwise.py --config training/configs/listwise_config.yaml \
+        --dataset_path "generation/traces/arm_ungated_lg_t${t}_1000.jsonl" \
+        --output_dir "outputs/arm_ungated_lg_t${t}_1000_s42" --seed 42 \
+        --wandb_group arms-1000 --wandb_run_name "train-ungated_lg_t${t}-1000-s42"
+    uv run evaluation/eval_gsm8k.py --model "outputs/arm_ungated_lg_t${t}_1000_s42" \
+        --n_shot 8 --n_samples 10 --maj_k 8 --pass_k 1,5,10 --temperature 0.8 \
+        --output "results/arm_ungated_lg_t${t}_s42_1000.json" \
+        --wandb_group arms-1000 --wandb_run_name "eval-arm_ungated_lg_t${t}_s42-1000" \
+        --resume --limit 500
+done
 
 # Negative-selection strategy for gated_lg (default: hardest)
 uv run generation/code/build_listwise.py \
@@ -121,6 +150,13 @@ uv run training/train_listwise.py --config training/configs/listwise_config.yaml
 Also report, per threshold, what fraction of "good" traces have a **wrong final
 answer** — that's the mechanism the ungated arm is supposed to exploit
 (`build_entailment_list.py` prints this at build time).
+
+> **Done (2026-08-18)**, 500q s42 (same-subset t0.5 references computed from the
+> Tier 1 detail files): threshold flat — t0.3 0.546, t0.5 0.532, t0.7 0.528
+> (NLI scores are bimodal; the threshold moves ~8 of ~400 lists, label flips
+> stay at 1.2–1.3% / 8.2–8.3%). Negative selection: hardest 0.532 > spread
+> 0.506 > easiest 0.498 — hard negatives matter; the default wins, nothing to
+> promote.
 
 ## Tier 3 — Scale & robustness (~20 h, optional until Tiers 1-2 conclude)
 
@@ -157,9 +193,11 @@ they never mix with the main runs.
 
 **During training, watch (job_type = `train-listwise`):**
 - `train/loss` — must *decrease from ~3.37* (that's `-log(1/5)·Σλ`, the
-  random-init value of the cascade loss). A flat line pinned at 3.3-3.4 for 50+
-  steps = the lr-too-low failure we hit before → kill and check config.
-- `train/learning_rate` — confirms 3e-5 schedule is live.
+  random-init value of the cascade loss). A healthy run at lr 1e-5 ends near
+  ~2.2 after 3 epochs. A flat line pinned at 3.3-3.4 for 50+ steps = either
+  lr far too low or `logp_agg: mean` (the bug fixed 2026-08-18: mean logps
+  compress β-scaled scores ~100×, pinning the loss) → kill and check config.
+- `train/learning_rate` — confirms the 1e-5 schedule is live.
 - `eval/loss` (per epoch) — divergence from train loss = overfitting the small list set.
 - Run config panel carries the full yaml (lr, LoRA, lambdas, seed) — verify the
   seed differs across the three runs of an arm.
