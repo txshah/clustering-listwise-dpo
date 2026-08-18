@@ -5,8 +5,9 @@ output_dir:         outputs/listwise_mistral7b
 # LIPO-λ hyperparameters
 beta:    0.1
 lambdas: [1.0, 0.75, 0.5, 0.25]   # λ per cascade level (top rank weighted most)
+logp_agg: sum   # sum = DPO/LPOI convention; mean pins the loss at init (β·Δlogp too small)
 
-learning_rate:               3.0e-5
+learning_rate:               1.0e-5   # Tier 0 winner (maj@8 0.486 vs 0.480 @3e-6, 0.448 @3e-5; 3e-6 flatlined)
 per_device_train_batch_size: 1     # 5 sequences per item — lower batch size needed
 gradient_accumulation_steps: 16
 num_train_epochs:            3

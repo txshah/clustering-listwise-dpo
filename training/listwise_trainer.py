@@ -23,9 +23,11 @@ from typing import Any
 
 # ── Log-prob computation ───────────────────────────────────────────────────────
 
-def get_per_sample_logps(model, input_ids, attention_mask, labels):
+def get_per_sample_logps(model, input_ids, attention_mask, labels, average: bool = False):
     """
-    Returns per-sample average log prob over response tokens only.
+    Returns per-sample log prob summed over response tokens only (DPO/LPOI
+    convention; average=True restores the old per-token mean, which compresses
+    the β-scaled score range so much the cascade loss stays pinned at init).
     labels has -100 for prompt tokens (masked out of loss).
 
     shape: input_ids [B, T] → returns [B]
@@ -39,7 +41,9 @@ def get_per_sample_logps(model, input_ids, attention_mask, labels):
     token_logps  = log_probs.gather(2, shift_labels.clamp(min=0).unsqueeze(-1)).squeeze(-1)  # [B, T-1]
 
     response_mask = (shift_labels != -100).float()         # [B, T-1]
-    per_sample = (token_logps * response_mask).sum(-1) / response_mask.sum(-1).clamp(min=1)
+    per_sample = (token_logps * response_mask).sum(-1)
+    if average:
+        per_sample = per_sample / response_mask.sum(-1).clamp(min=1)
     return per_sample                                      # [B]
 
 
@@ -152,13 +156,14 @@ class ListwiseTrainer(Trainer):
     ref_model must be the frozen SFT checkpoint (same architecture).
     """
 
-    def __init__(self, ref_model, beta: float, lambdas: tuple, **kwargs):
+    def __init__(self, ref_model, beta: float, lambdas: tuple, logp_agg: str = "sum", **kwargs):
         super().__init__(**kwargs)
         # ref_model=None means use the base model via disable_adapter() (LoRA setup).
         # ref_model=<model> means a separate frozen copy (full fine-tune setup).
         self.ref_model = ref_model
         self.beta      = beta
         self.lambdas   = lambdas
+        self.average_logps = logp_agg == "mean"
         if self.ref_model is not None:
             self.ref_model.eval()
             for p in self.ref_model.parameters():
@@ -170,6 +175,7 @@ class ListwiseTrainer(Trainer):
             inputs[f"{key}_input_ids"].to(model.device),
             inputs[f"{key}_attention_mask"].to(model.device),
             inputs[f"{key}_labels"].to(model.device),
+            average=self.average_logps,
         )
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):

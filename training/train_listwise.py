@@ -123,6 +123,7 @@ def main():
         ref_model     = None,
         beta          = cfg.get("beta", 0.1),
         lambdas       = lambdas,
+        logp_agg      = cfg.get("logp_agg", "sum"),
         model         = model,
         args          = training_args,
         train_dataset = train_dataset,
