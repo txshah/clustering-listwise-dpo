@@ -1,0 +1,18 @@
+{
+  "model": "mistralai/Mistral-7B-v0.1",
+  "backend": "vllm",
+  "split": "test",
+  "n_shot": 8,
+  "n_samples": 10,
+  "temperature": 0.8,
+  "metrics": {
+    "total": 1319,
+    "n_samples": 10,
+    "avg@1": 0.3288097043214557,
+    "maj@8": 0.4874905231235785,
+    "pass@1": 0.3288097043214556,
+    "pass@5": 0.6534381505950877,
+    "pass@10": 0.759666413949962,
+    "eval_seconds": 652.4
+  }
+}

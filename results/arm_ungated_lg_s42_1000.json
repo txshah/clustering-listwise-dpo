@@ -1,0 +1,18 @@
+{
+  "model": "outputs/arm_ungated_lg_1000_s42",
+  "backend": "vllm",
+  "split": "test",
+  "n_shot": 8,
+  "n_samples": 10,
+  "temperature": 0.8,
+  "metrics": {
+    "total": 1319,
+    "n_samples": 10,
+    "avg@1": 0.35094768764215317,
+    "maj@8": 0.5238817285822593,
+    "pass@1": 0.3509476876421531,
+    "pass@5": 0.6781171402096345,
+    "pass@10": 0.7831690674753601,
+    "eval_seconds": 1071.7
+  }
+}

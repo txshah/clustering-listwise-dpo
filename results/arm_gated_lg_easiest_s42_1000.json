@@ -1,0 +1,18 @@
+{
+  "model": "outputs/arm_gated_lg_easiest_1000_s42",
+  "backend": "vllm",
+  "split": "test",
+  "n_shot": 8,
+  "n_samples": 10,
+  "temperature": 0.8,
+  "metrics": {
+    "total": 500,
+    "n_samples": 10,
+    "avg@1": 0.3452,
+    "maj@8": 0.498,
+    "pass@1": 0.3452,
+    "pass@5": 0.6609206349206349,
+    "pass@10": 0.774,
+    "eval_seconds": 409.1
+  }
+}

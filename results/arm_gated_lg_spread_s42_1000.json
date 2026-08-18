@@ -1,0 +1,18 @@
+{
+  "model": "outputs/arm_gated_lg_spread_1000_s42",
+  "backend": "vllm",
+  "split": "test",
+  "n_shot": 8,
+  "n_samples": 10,
+  "temperature": 0.8,
+  "metrics": {
+    "total": 500,
+    "n_samples": 10,
+    "avg@1": 0.3562,
+    "maj@8": 0.506,
+    "pass@1": 0.35619999999999996,
+    "pass@5": 0.6715714285714286,
+    "pass@10": 0.77,
+    "eval_seconds": 413.4
+  }
+}

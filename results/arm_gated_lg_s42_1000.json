@@ -1,0 +1,18 @@
+{
+  "model": "outputs/arm_gated_lg_1000_s42",
+  "backend": "vllm",
+  "split": "test",
+  "n_shot": 8,
+  "n_samples": 10,
+  "temperature": 0.8,
+  "metrics": {
+    "total": 1319,
+    "n_samples": 10,
+    "avg@1": 0.3538286580742987,
+    "maj@8": 0.5178165276724791,
+    "pass@1": 0.3538286580742987,
+    "pass@5": 0.6741669374345645,
+    "pass@10": 0.7748294162244125,
+    "eval_seconds": 1053.5
+  }
+}
