@@ -1,0 +1,18 @@
+{
+  "model": "outputs/arm_length_7473_s42",
+  "backend": "vllm",
+  "split": "test",
+  "n_shot": 8,
+  "n_samples": 10,
+  "temperature": 0.8,
+  "metrics": {
+    "total": 1319,
+    "n_samples": 10,
+    "avg@1": 0.3956785443517817,
+    "maj@8": 0.5511751326762699,
+    "pass@1": 0.3956785443517816,
+    "pass@5": 0.7057354657809548,
+    "pass@10": 0.7983320697498104,
+    "eval_seconds": 968.8
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "model": "outputs/arm_ungated_lg_7473_s43",
+  "backend": "vllm",
+  "split": "test",
+  "n_shot": 8,
+  "n_samples": 10,
+  "temperature": 0.8,
+  "metrics": {
+    "total": 1319,
+    "n_samples": 10,
+    "avg@1": 0.40955269143290374,
+    "maj@8": 0.5670962850644428,
+    "pass@1": 0.40955269143290374,
+    "pass@5": 0.7177846372311877,
+    "pass@10": 0.8097043214556482,
+    "eval_seconds": 1104.1
+  }
+}
