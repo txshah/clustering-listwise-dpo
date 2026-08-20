@@ -7,9 +7,9 @@
 ## Findings
 
 1. **Entailment ranking works.** maj@8 0.521–0.525 vs 0.497 for length ranking at 1000q training data (+2.4–2.8, seed std ≤0.004); 0.567 vs 0.556 at full data.
-2. **The correctness gate is unnecessary.** Label-free PORT-style lists (binarized entailment) match the correctness-gated arm within noise at every scale; the binarization threshold is irrelevant (NLI scores are bimodal — t0.3/0.5/0.7 differ by ~8 of ~400 lists).
+2. **The correctness gate is unnecessary.** Label-free PORT-style lists (binarized entailment) match the correctness-gated arm within noise at every scale (0.525 vs 0.521 at 1000q; 0.567 vs 0.569 at 7473q); the binarization threshold is irrelevant (NLI scores are bimodal — t0.3/0.5/0.7 differ by ~8 of ~400 lists).
 3. **Hard negatives carry the gain.** Negative selection: hardest 0.532 > spread 0.506 > easiest 0.498 (500q).
-4. **Data scale dominates.** 1000→7473 questions lifts every arm ~5–6 pts; the entailment edge narrows +2.8→+1.1. Best model: `ungated_lg` @7473q, **maj@8 0.567±0.000** vs base 0.488.
+4. **Data scale dominates.** 1000→7473 questions lifts every arm ~5–6 pts; the entailment edge narrows to +1.1–1.3. Best arms: the entailment pair @7473q, **maj@8 0.567–0.569** vs base 0.488.
 5. **Loss bug found & fixed** (`74fe28a`): mean per-token logps pinned the cascade loss at init (3.371) at every lr — β·Δlogp too small by ~100×. Fixed to summed logps (`logp_agg: sum`). Failure signature documented in EXPERIMENTS.md.
 
 ## Results
@@ -27,13 +27,14 @@
 
 **Tier 2 — gate sweeps** (500q, s42; t0.5 refs recomputed from Tier 1 detail files): thresholds flat (0.546/0.532/0.528 for t0.3/0.5/0.7); negatives hardest 0.532 > spread 0.506 > easiest 0.498 — defaults stand.
 
-**Tier 3 — scale-up** (7473q data → 3037/3005 lists, full split, 2 seeds):
+**Tier 3 — scale-up** (7473q data → 3037/3037/3005 lists, all three arms, full split, 2 seeds):
 
 | model | maj@8 | avg@1 | pass@10 | Δ base |
 |---|---|---|---|---|
 | base | 0.488 | 0.327 | 0.753 | — |
 | length | 0.556±0.008 | 0.396 | 0.809 | +6.8 |
 | **ungated_lg** | **0.567±0.000** | 0.408 | 0.809 | +7.9 |
+| **gated_lg** | **0.569±0.008** | 0.412 | 0.809 | +8.1 |
 
 Figures: `graphs/arms_accuracy.png` (1000q), `graphs/arms_accuracy_7473.png` (7473q).
 
@@ -43,8 +44,8 @@ The entailment gain (+1.1 to +2.8 maj@8) is real, low-variance, and consistent �
 
 ## Limitations
 
-Two seeds per cell (one in Tier 2); `gated_lg` not run at 7473q; sum-logps add mild length sensitivity (standard for DPO-family, untested interaction with the length arm); one base model / task / NLI scorer; base maj@8 ~3.5 pts under the Mistral paper (prompt/parser differences — comparisons unaffected).
+Two seeds per cell (one in Tier 2); sum-logps add mild length sensitivity (standard for DPO-family, untested interaction with the length arm); one base model / task / NLI scorer; base maj@8 ~3.5 pts under the Mistral paper (prompt/parser differences — comparisons unaffected).
 
 ## Reproducibility
 
-Branch `entailment-1000`; key commits `74fe28a` (loss fix + lr), `b473c6b` (1000q artifacts), `33aca23` (runbook fixes), `9755249` (7473q). Datasets + eval summary JSONs committed; raw dumps and per-question detail files regenerable via `run_entailment.sh` / `run_arms.sh` (resumable). ~34 h wall-clock total (~3 h lost to the pre-fix sweep); full-data generation 72.5 min.
+Branch `entailment-1000`; key commits `74fe28a` (loss fix + lr), `b473c6b` (1000q artifacts), `33aca23` (runbook fixes), `9755249` (7473q). Datasets + eval summary JSONs committed; raw dumps and per-question detail files regenerable via `run_entailment.sh` / `run_arms.sh` (resumable). ~42 h wall-clock total (~3 h lost to the pre-fix sweep); full-data generation 72.5 min.
